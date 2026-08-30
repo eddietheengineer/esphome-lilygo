@@ -7,7 +7,8 @@ Handles:
 The cellular data path is handled by the microlink (Tailscale) component's
 built-in SIM7670G PPP driver. GPS NMEA is read from a separate physical UART
 (UART2) that is independent of the AT/PPP UART, so GPS works simultaneously
-with cellular data. GNSS is powered on via AT+CGNSSPWR=1 on the AT UART.
+with cellular data. GNSS is powered on via AT commands on the AT UART
+(AT+CGNSSPWR=1, AT+CGNSSPORTSWITCH=2, AT+CGPS=1,1) sent by the microlink.
 """
 
 import esphome.codegen as cg
