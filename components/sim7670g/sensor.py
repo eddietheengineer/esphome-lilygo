@@ -6,7 +6,7 @@ from esphome.const import (
     STATE_CLASS_MEASUREMENT,
     UNIT_VOLT,
     UNIT_DEGREES,
-    UNIT_METERS,
+    UNIT_METER,
     UNIT_KILOMETERS_PER_HOUR,
 )
 
@@ -34,7 +34,7 @@ GPS_LON_SCHEMA = sensor.sensor_schema(
     state_class=STATE_CLASS_MEASUREMENT,
 )
 GPS_ALT_SCHEMA = sensor.sensor_schema(
-    unit_of_measurement=UNIT_METERS,
+    unit_of_measurement=UNIT_METER,
     accuracy_decimals=1,
     state_class=STATE_CLASS_MEASUREMENT,
 )
