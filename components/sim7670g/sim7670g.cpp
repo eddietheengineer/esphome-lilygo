@@ -1,23 +1,31 @@
 #include "sim7670g.h"
 
 #include "esphome/core/log.h"
+#include "esphome/core/hal.h"
 
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
+
+#ifdef USE_ESP32
+extern "C" {
+#include "ml_cellular.h"
+}
+#endif
+
 
 namespace esphome {
 namespace sim7670g {
 
 static const char *const TAG = "sim7670g";
 
-// GPS UART pins for T-SIM7670G-S3 Standard board
-// Modem GPS TX → ESP32 GPIO45 (RX), ESP32 GPIO48 (TX) → Modem GPS RX
-static constexpr uart_port_t GPS_UART = UART_NUM_2;
-static constexpr int GPS_RX_PIN = 45;  // ESP32 RX ← modem GPS TX
-static constexpr int GPS_TX_PIN = 48;  // ESP32 TX → modem GPS RX
-static constexpr int GPS_BAUD = 115200;
+// Global pointer for C callback → C++ instance bridge
+static Sim7670gComponent *s_sim7670g_instance = nullptr;
 
+static void modem_rx_callback(const uint8_t *data, size_t len, void *arg) {
+  if (s_sim7670g_instance)
+    s_sim7670g_instance->feed_modem_data(data, len);
+}
 // ---------------------------------------------------------------------------
 // NMEA Parser
 // ---------------------------------------------------------------------------
@@ -223,37 +231,115 @@ bool Sim7670gComponent::parse_rmc(const char *fields_csv) {
   return true;
 }
 
+/// Parse AT+CGPSINFO response:
+/// +CGPSINFO: lat_ddmm.mm,lon_ddmm.mm,time,alt,speed,hdop,vsat,usat
+void Sim7670gComponent::parse_cgpsinfo(const char *resp) {
+  // Response format: +CGPSINFO: lat,lon,time,alt,speed,hdop,vsat,usat
+  // Example: +CGPSINFO: 4042.3456,N,7400.1234,W,120000,100.5,12.3,2.5,8,10
+  const char *prefix = strstr(resp, "+CGPSINFO:");
+  if (!prefix)
+    return;
+
+  const char *data = prefix + 10;  // skip "+CGPSINFO:"
+
+  char buf[256];
+  strncpy(buf, data, sizeof(buf) - 1);
+  buf[sizeof(buf) - 1] = '\0';
+
+  // Remove trailing \r\n
+  size_t len = strlen(buf);
+  while (len > 0 && (buf[len - 1] == '\r' || buf[len - 1] == '\n'))
+    buf[--len] = '\0';
+
+  char *tok[16];
+  int ntok = 0;
+  char *saveptr = nullptr;
+  for (char *t = strtok_r(buf, ",", &saveptr); t && ntok < 16;
+       t = strtok_r(nullptr, ",", &saveptr)) {
+    tok[ntok++] = t;
+  }
+
+  // tok[0]=lat, 1=N/S, 2=lon, 3=E/W, 4=time, 5=alt, 6=speed, 7=hdop,
+  // 8=vsat, 9=usat
+  if (ntok < 10)
+    return;
+
+  double lat_raw = atof(tok[0]);
+  if (lat_raw == 0.0)
+    return;
+  int lat_deg = static_cast<int>(lat_raw / 100);
+  double lat_min = lat_raw - lat_deg * 100;
+  double lat = (lat_deg + lat_min / 60.0) * (strcmp(tok[1], "S") == 0 ? -1.0 : 1.0);
+
+  double lon_raw = atof(tok[2]);
+  if (lon_raw == 0.0)
+    return;
+  int lon_deg = static_cast<int>(lon_raw / 100);
+  double lon_min = lon_raw - lon_deg * 100;
+  double lon = (lon_deg + lon_min / 60.0) * (strcmp(tok[3], "W") == 0 ? -1.0 : 1.0);
+
+  double alt = atof(tok[5]);
+  double speed_kmh = atof(tok[6]);  // already in km/h for CGPSINFO
+  double hdop = atof(tok[7]);
+  int satellites = atoi(tok[9]);  // used satellites
+
+  if (this->latitude_sensor_)
+    this->latitude_sensor_->publish_state(static_cast<float>(lat));
+  if (this->longitude_sensor_)
+    this->longitude_sensor_->publish_state(static_cast<float>(lon));
+  if (this->altitude_sensor_)
+    this->altitude_sensor_->publish_state(static_cast<float>(alt));
+  if (this->speed_sensor_)
+    this->speed_sensor_->publish_state(static_cast<float>(speed_kmh));
+  if (this->satellites_sensor_)
+    this->satellites_sensor_->publish_state(satellites);
+  if (this->hdop_sensor_)
+    this->hdop_sensor_->publish_state(static_cast<float>(hdop));
+
+  // Parse time (UTC, format HHMMSS)
+  if (this->datetime_sensor_ && strlen(tok[4]) >= 6) {
+    char dt[32];
+    int hh = (tok[4][0] - '0') * 10 + (tok[4][1] - '0');
+    int mn = (tok[4][2] - '0') * 10 + (tok[4][3] - '0');
+    int ss = (tok[4][4] - '0') * 10 + (tok[4][5] - '0');
+    snprintf(dt, sizeof(dt), "%02d:%02d:%02dZ", hh, mn, ss);
+    this->datetime_sensor_->publish_state(dt);
+  }
+
+  if (this->fix_status_sensor_) {
+    const char *status_str = satellites > 0 ? "3D Fix" : "No Fix";
+    this->fix_status_sensor_->publish_state(status_str);
+  }
+
+  ESP_LOGD(TAG, "CGPSINFO: lat=%.6f lon=%.6f alt=%.1f speed=%.1f sat=%d hdop=%.2f",
+           lat, lon, alt, speed_kmh, satellites, hdop);
+}
+
 // ---------------------------------------------------------------------------
-// GPS RX Task (reads dedicated GPS UART)
+// Modem Data Feed (from microlink RX callback)
 // ---------------------------------------------------------------------------
 
-#ifdef USE_ESP32
-void Sim7670gComponent::gps_rx_task(void *arg) {
-  Sim7670gComponent *comp = static_cast<Sim7670gComponent *>(arg);
-  uint8_t buf[256];
-  uint32_t bytes_total = 0;
-  uint32_t last_report = 0;
+void Sim7670gComponent::feed_modem_data(const uint8_t *data, size_t len) {
+  if (!this->gps_enabled_)
+    return;
 
-  while (true) {
-    int len = uart_read_bytes(GPS_UART, buf, sizeof(buf), pdMS_TO_TICKS(100));
-    if (len > 0) {
-      bytes_total += len;
-      comp->feed_nMEA(buf, len);
-      // Log first NMEA line received
-      if (bytes_total < 200) {
-        ESP_LOGD(TAG, "GPS UART received %d bytes (total %lu): %.60s",
-                 len, bytes_total, (const char *)buf);
-      }
-    }
-    // Periodic status report every 30s
-    uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
-    if (now - last_report >= 30000) {
-      last_report = now;
-      ESP_LOGI(TAG, "GPS UART: %lu bytes received total", bytes_total);
+  // Feed NMEA parser for $GPGGA/$GNRMC sentences
+  this->feed_nMEA(data, len);
+
+  // Look for AT+CGPSINFO response
+  char line_buf[256];
+  size_t line_pos = 0;
+  for (size_t i = 0; i < len; i++) {
+    char c = static_cast<char>(data[i]);
+    if (c == '\n' && line_pos > 0) {
+      line_buf[line_pos] = '\0';
+      parse_cgpsinfo(line_buf);
+      line_pos = 0;
+    } else if (line_pos < sizeof(line_buf) - 1) {
+      line_buf[line_pos++] = c;
     }
   }
 }
-#endif
 
 // ---------------------------------------------------------------------------
 // ESPHome Component Lifecycle
@@ -286,41 +372,15 @@ void Sim7670gComponent::setup() {
   this->adc_ready_ = true;
   ESP_LOGI(TAG, "Battery ADC ready on channel %u (divider %.2f)", this->battery_adc_channel_,
            this->voltage_divider_);
+#endif
 
-  // GPS UART (dedicated GPS UART on GPIO 45/48)
-  if (this->gps_enabled_) {
-    uart_config_t gps_uart_config = {
-        .baud_rate = GPS_BAUD,
-        .data_bits = UART_DATA_8_BITS,
-        .parity    = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_DEFAULT,
-    };
-
-    esp_err_t err = uart_param_config(GPS_UART, &gps_uart_config);
-    if (err != ESP_OK) {
-      ESP_LOGW(TAG, "GPS UART param config failed: %s", esp_err_to_name(err));
-    } else {
-      err = uart_driver_install(GPS_UART, 2048, 0, 0, nullptr, 0);
-      if (err != ESP_OK) {
-        ESP_LOGW(TAG, "GPS UART driver install failed: %s", esp_err_to_name(err));
-      } else {
-        err = uart_set_pin(GPS_UART, GPS_TX_PIN, GPS_RX_PIN,
-                           UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-        if (err != ESP_OK) {
-          ESP_LOGW(TAG, "GPS UART set pin failed: %s", esp_err_to_name(err));
-        } else {
-          xTaskCreatePinnedToCore(gps_rx_task, "gps_rx", 2048, this,
-                                    1, &this->gps_task_, 1);
-          ESP_LOGI(TAG, "GPS UART ready (UART2: TX=GPIO%d, RX=GPIO%d, %d baud)",
-                   GPS_TX_PIN, GPS_RX_PIN, GPS_BAUD);
-        }
-      }
-    }
-  }
+  // Register as microlink RX callback to receive modem UART data (NMEA + AT responses)
+#ifdef USE_ESP32
+  s_sim7670g_instance = this;
+  ml_cellular_set_rx_callback(modem_rx_callback, nullptr);
+  ESP_LOGI(TAG, "GPS NMEA parser enabled (RX callback registered with microlink)");
 #else
-  this->mark_failed();
+  ESP_LOGI(TAG, "GPS NMEA parser enabled");
 #endif
 }
 
@@ -334,27 +394,32 @@ void Sim7670gComponent::loop() {
 
 void Sim7670gComponent::update_battery() {
 #ifdef USE_ESP32
-  if (!this->adc_ready_ || this->adc_handle_ == nullptr)
+  if (!this->adc_ready_ || !this->battery_sensor_)
     return;
-  int raw = 0;
+
+  int adc_val = 0;
   if (adc_oneshot_read(this->adc_handle_,
-                       static_cast<adc_channel_t>(this->battery_adc_channel_), &raw) != ESP_OK) {
-    ESP_LOGW(TAG, "ADC read failed");
+                       static_cast<adc_channel_t>(this->battery_adc_channel_),
+                       &adc_val) != ESP_OK) {
     return;
   }
-  float mv = raw * 3500.0f / 4095.0f;
-  float voltage = (mv / 1000.0f) * this->voltage_divider_;
-  if (this->battery_sensor_ != nullptr)
-    this->battery_sensor_->publish_state(voltage);
+
+  // ADC12: 0-4095 maps to 0-1.1V (with ATTEN_DB_12)
+  float v_raw = (adc_val / 4095.0f) * 1.1f * this->voltage_divider_;
+  this->battery_sensor_->publish_state(v_raw);
 #endif
 }
 
 void Sim7670gComponent::dump_config() {
-  ESP_LOGCONFIG(TAG, "SIM7670G:");
-  ESP_LOGCONFIG(TAG, "  Battery ADC channel: %u", this->battery_adc_channel_);
-  ESP_LOGCONFIG(TAG, "  Voltage divider: %.2f", this->voltage_divider_);
-  ESP_LOGCONFIG(TAG, "  Update interval: %u ms", this->update_interval_ms_);
-  ESP_LOGCONFIG(TAG, "  GPS: %s", this->gps_enabled_ ? "enabled" : "disabled");
+  LOG_SENSOR("  ", "Latitude", this->latitude_sensor_);
+  LOG_SENSOR("  ", "Longitude", this->longitude_sensor_);
+  LOG_SENSOR("  ", "Altitude", this->altitude_sensor_);
+  LOG_SENSOR("  ", "Speed", this->speed_sensor_);
+  LOG_SENSOR("  ", "Satellites", this->satellites_sensor_);
+  LOG_SENSOR("  ", "HDOP", this->hdop_sensor_);
+  LOG_TEXT_SENSOR("  ", "Datetime", this->datetime_sensor_);
+  LOG_TEXT_SENSOR("  ", "Fix Status", this->fix_status_sensor_);
+  ESP_LOGCONFIG(TAG, "  GPS NMEA parser: %s", this->gps_enabled_ ? "enabled" : "disabled");
 }
 
 }  // namespace sim7670g

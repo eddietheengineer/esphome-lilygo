@@ -10,23 +10,19 @@
 
 #ifdef USE_ESP32
 #include "esp_adc/adc_oneshot.h"
-#include "driver/uart.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/semphr.h"
 #endif
 
 
 namespace esphome {
 namespace sim7670g {
 
-/// LILYGO T-SIM7670G-S3 component: battery ADC + GPS NMEA parser.
+/// LILYGO T-SIM7670G-S3 component: battery ADC + GPS via microlink RX callback.
 ///
 /// Battery: reads the board's battery voltage from its ADC pin.
-/// GPS: reads NMEA sentences from the modem's dedicated GPS UART (UART2,
-///     GPIO 45/48 on the Standard board). This is a separate physical UART
-///     from the AT/PPP UART, so GPS works simultaneously with cellular data.
-///     Powers on GNSS via AT+CGNSSPWR=1 on the modem's AT UART.
+/// GPS: receives NMEA sentences and AT+CGPSINFO data from the microlink's
+///     RX callback (modem UART output). The SIM7670G's built-in GNSS outputs
+///     NMEA on the AT UART (not a dedicated GPS UART), so we hook into the
+///     microlink's UART data stream to parse GPS position data.
 class Sim7670gComponent : public Component {
  public:
   // Battery
@@ -48,19 +44,20 @@ class Sim7670gComponent : public Component {
   void set_datetime_sensor(text_sensor::TextSensor *s) { this->datetime_sensor_ = s; }
   void set_fix_status_sensor(text_sensor::TextSensor *s) { this->fix_status_sensor_ = s; }
 
+  /// Feed modem UART data (from microlink RX callback) for GPS parsing.
+  void feed_modem_data(const uint8_t *data, size_t len);
+
   float get_setup_priority() const override { return setup_priority::DATA; }
   void setup() override;
   void loop() override;
   void dump_config() override;
 
  private:
-#ifdef USE_ESP32
-  static void gps_rx_task(void *arg);
-#endif
   void feed_nMEA(const uint8_t *data, size_t len);
   bool parse_nmea_line(const char *line);
   bool parse_gga(const char *fields_csv);
   bool parse_rmc(const char *fields_csv);
+  void parse_cgpsinfo(const char *resp);
   void update_battery();
 
   // Battery
@@ -76,15 +73,10 @@ class Sim7670gComponent : public Component {
   sensor::Sensor *battery_sensor_{nullptr};
 
   bool gps_enabled_{true};
-  bool gnss_powered_{false};
 
   // NMEA line buffer
   char nmea_buf_[128];
   size_t nmea_buf_len_{0};
-
-#ifdef USE_ESP32
-  TaskHandle_t gps_task_{nullptr};
-#endif
 
   // GPS sensors
   sensor::Sensor *latitude_sensor_{nullptr};
