@@ -311,8 +311,7 @@ void Sim7670gComponent::setup() {
         if (err != ESP_OK) {
           ESP_LOGW(TAG, "GPS UART set pin failed: %s", esp_err_to_name(err));
         } else {
-          // Start GPS RX task
-          xTaskCreateForPinnedCore(gps_rx_task, "gps_rx", 2048, this,
+          xTaskCreatePinnedToCore(gps_rx_task, "gps_rx", 2048, this,
                                     1, &this->gps_task_, 1);
           ESP_LOGI(TAG, "GPS UART ready (UART2: TX=GPIO%d, RX=GPIO%d, %d baud)",
                    GPS_TX_PIN, GPS_RX_PIN, GPS_BAUD);
