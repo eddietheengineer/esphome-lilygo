@@ -12,24 +12,33 @@
 #include "esp_adc/adc_oneshot.h"
 #endif
 
-// Forward-declare the microlink RX callback type so we can register without
-// including the full ml_cellular.h (keeps the component self-contained).
-typedef void (*ml_rx_callback_t)(const uint8_t *data, size_t len, void *arg);
+// Forward-declare microlink AT command API.
 extern "C" {
-  void ml_cellular_set_rx_callback(ml_rx_callback_t cb, void *arg);
+  int ml_cellular_send_at(const char *cmd, char *response, size_t resp_size, int timeout_ms);
+  typedef enum {
+      ML_CELL_STATE_OFF,
+      ML_CELL_STATE_INIT,
+      ML_CELL_STATE_AT_OK,
+      ML_CELL_STATE_SIM_READY,
+      ML_CELL_STATE_REGISTERED,
+      ML_CELL_STATE_PPP_CONNECTING,
+      ML_CELL_STATE_PPP_CONNECTED,
+      ML_CELL_STATE_DATA_CONNECTED,
+      ML_CELL_STATE_ERROR,
+  } ml_cellular_state_t;
+  ml_cellular_state_t ml_cellular_get_state(void);
 }
 
 namespace esphome {
 namespace sim7670g {
 
-/// LILYGO T-SIM7670G-S3 component: battery ADC + GPS NMEA parser.
+/// LILYGO T-SIM7670G-S3 component: battery ADC + GPS via AT+CGPSINFO polling.
 ///
 /// Battery: reads the board's battery voltage from its ADC pin.
-/// GPS: registers an RX byte callback with the microlink cellular driver to
-///     intercept NMEA sentences from the SIM7670G modem UART during AT command
-///     phases (before PPP dials and in AT socket fallback mode). Parses GGA
-///     and RMC sentences to expose latitude, longitude, altitude, speed,
-///     satellites, HDOP, datetime, and fix status.
+/// GPS: powers on the SIM7670G GNSS engine (AT+CGNSSPWR=1) during setup,
+///     then periodically polls AT+CGPSINFO to get the last fix. Polling only
+///     works when the modem is NOT in PPP mode (AT command phase or AT socket
+///     fallback). During PPP mode the UART carries PPP data — GPS is unavailable.
 class Sim7670gComponent : public Component {
  public:
   // Battery
@@ -56,16 +65,9 @@ class Sim7670gComponent : public Component {
   void loop() override;
   void dump_config() override;
 
-  /// Feed a chunk of UART RX bytes into the NMEA parser.
-  void feed_nMEA(const uint8_t *data, size_t len);
-
  private:
-  static void rx_callback(const uint8_t *data, size_t len, void *arg);
-
   void update_battery();
-  bool parse_nmea_line(const char *line);
-  bool parse_gga(const char *line);
-  bool parse_rmc(const char *line);
+  void query_gps();
 
   // Battery
   uint8_t battery_adc_channel_{8};
@@ -81,10 +83,12 @@ class Sim7670gComponent : public Component {
 
   // GPS
   bool gps_enabled_{true};
-
-  // NMEA line buffer (max NMEA sentence ~83 chars + margin)
-  char nmea_buf_[128];
-  size_t nmea_buf_len_{0};
+  bool gnss_powered_{false};
+  uint32_t last_gps_query_{0};
+  // Poll every 60s — AT+CGPSINFO is a blocking AT command.
+  static constexpr uint32_t GPS_POLL_INTERVAL_MS = 60000;
+  // Delay first query to give GNSS time to acquire after powering on.
+  static constexpr uint32_t GPS_INITIAL_DELAY_MS = 30000;
 
   // GPS sensors
   sensor::Sensor *latitude_sensor_{nullptr};

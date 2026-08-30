@@ -12,211 +12,125 @@ namespace sim7670g {
 static const char *const TAG = "sim7670g";
 
 // ---------------------------------------------------------------------------
-// NMEA Parser
+// AT+CGPSINFO Parser
 // ---------------------------------------------------------------------------
+//
+// Response format:
+//   +CGPSINFO: ddmm.mmmmm,h,dddmm.mmmmm,h,hhh.hh,ddmmyy,hhmmss.ss,sss.s,nn
+//
+// Fields (0-indexed after splitting on ','):
+//   0 = latitude    (ddmm.mmmmm)
+//   1 = N/S indicator
+//   2 = longitude   (dddmm.mmmmm)
+//   3 = E/W indicator
+//   4 = altitude    (meters, can be empty)
+//   5 = date        (ddmmyy)
+//   6 = time        (hhmmss.ss)
+//   7 = speed       (knots, can be empty)
+//   8 = course      (degrees, can be empty)
+//   9 = satellites  (can be empty)
 
-/// Verify NMEA checksum (last two hex chars after '*').
-static bool check_nmea_checksum(const char *sentence, size_t len) {
-  const char *star = nullptr;
-  for (size_t i = 0; i < len; i++) {
-    if (sentence[i] == '*') {
-      star = sentence + i;
-      break;
-    }
+static void split_csv(char *buf, char **tok, int *ntok) {
+  *ntok = 0;
+  char *saveptr = nullptr;
+  for (char *t = strtok_r(buf, ",", &saveptr); t && *ntok < 16;
+       t = strtok_r(nullptr, ",", &saveptr)) {
+    tok[*ntok] = t;
+    (*ntok)++;
   }
-  if (!star || star + 3 > sentence + len)
-    return false;
-
-  uint8_t cs = 0;
-  for (const char *p = sentence + 1; p < star; p++)
-    cs ^= static_cast<uint8_t>(*p);
-
-  uint8_t expected;
-  if (sscanf(star + 1, "%2x", &expected) != 1)
-    return false;
-  return cs == expected;
 }
 
-void Sim7670gComponent::feed_nMEA(const uint8_t *data, size_t len) {
+void Sim7670gComponent::query_gps() {
   if (!this->gps_enabled_)
     return;
 
-  for (size_t i = 0; i < len; i++) {
-    char c = static_cast<char>(data[i]);
-
-    if (c == '$') {
-      this->nmea_buf_len_ = 0;
-      this->nmea_buf_[0] = '\0';
+  // Power on GNSS on first query
+  if (!this->gnss_powered_) {
+    char resp[256];
+    int len = ml_cellular_send_at("AT+CGNSSPWR=1", resp, sizeof(resp), 5000);
+    if (len > 0 && strstr(resp, "OK")) {
+      this->gnss_powered_ = true;
+      ESP_LOGI(TAG, "GNSS powered on");
+    } else {
+      ESP_LOGW(TAG, "Failed to power on GNSS");
+      return;
     }
-
-    if (this->nmea_buf_len_ < sizeof(this->nmea_buf_) - 1 &&
-        (c == '$' || this->nmea_buf_len_ > 0)) {
-      this->nmea_buf_[this->nmea_buf_len_++] = c;
-      this->nmea_buf_[this->nmea_buf_len_] = '\0';
-    }
-
-    if (c == '\n' && this->nmea_buf_len_ > 5) {
-      parse_nmea_line(this->nmea_buf_);
-      this->nmea_buf_len_ = 0;
-      this->nmea_buf_[0] = '\0';
-    }
+    // First call — wait for initial acquisition
+    this->last_gps_query_ = millis() + GPS_INITIAL_DELAY_MS;
+    return;
   }
-}
 
-bool Sim7670gComponent::parse_nmea_line(const char *line) {
-  size_t len = strlen(line);
-  if (len < 6)
-    return false;
-
-  if (!check_nmea_checksum(line, len))
-    return false;
-
-  // Determine sentence type (skip leading '$')
-  const char *type = line + 1;
-  if (strncmp(type, "GNGGA", 5) == 0 || strncmp(type, "GPGGA", 5) == 0) {
-    // Strip to fields (remove $prefix and *checksum\r\n)
-    const char *fields_start = type + 6;  // skip talker+type+comma (GNGGA,)
-    const char *star = strchr(line, '*');
-    size_t fields_len = star ? (size_t)(star - fields_start) : strlen(fields_start);
-    // Remove trailing \r
-    while (fields_len > 0 && (line[fields_start - line + fields_len - 1] == '\r' ||
-                               line[fields_start - line + fields_len - 1] == '\n'))
-      fields_len--;
-    char fields[128];
-    if (fields_len >= sizeof(fields))
-      fields_len = sizeof(fields) - 1;
-    memcpy(fields, fields_start, fields_len);
-    fields[fields_len] = '\0';
-    return parse_gga(fields);
+  char resp[512];
+  int len = ml_cellular_send_at("AT+CGPSINFO", resp, sizeof(resp), 10000);
+  if (len <= 0) {
+    ESP_LOGW(TAG, "AT+CGPSINFO timeout (modem may be in PPP mode)");
+    return;
   }
-  if (strncmp(type, "GNRMC", 5) == 0 || strncmp(type, "GPRMC", 5) == 0) {
-    const char *fields_start = type + 6;  // skip talker+type+comma (GNRMC,)
-    const char *star = strchr(line, '*');
-    size_t fields_len = star ? (size_t)(star - fields_start) : strlen(fields_start);
-    while (fields_len > 0 && (line[fields_start - line + fields_len - 1] == '\r' ||
-                               line[fields_start - line + fields_len - 1] == '\n'))
-      fields_len--;
-    char fields[128];
-    if (fields_len >= sizeof(fields))
-      fields_len = sizeof(fields) - 1;
-    memcpy(fields, fields_start, fields_len);
-    fields[fields_len] = '\0';
-    return parse_rmc(fields);
+
+  // Find "+CGPSINFO:" in response
+  char *p = strstr(resp, "+CGPSINFO:");
+  if (!p) {
+    ESP_LOGD(TAG, "No +CGPSINFO in response: %s", resp);
+    return;
   }
-  return false;
-}
+  p += 10;  // skip "+CGPSINFO:"
 
-/// Parse GGA fields (CSV): time,lat,N/S,lon,E/W,quality,satellites,HDOP,alt,M,...
-bool Sim7670gComponent::parse_gga(const char *fields_csv) {
-  char buf[128];
-  strncpy(buf, fields_csv, sizeof(buf) - 1);
-  buf[sizeof(buf) - 1] = '\0';
-
+  // Split fields
   char *tok[16];
   int ntok = 0;
-  char *saveptr = nullptr;
-  for (char *t = strtok_r(buf, ",", &saveptr); t && ntok < 16;
-       t = strtok_r(nullptr, ",", &saveptr)) {
-    tok[ntok++] = t;
+  split_csv(p, tok, &ntok);
+
+  if (ntok < 4) {
+    ESP_LOGD(TAG, "Too few fields in CGPSINFO: %d", ntok);
+    return;
   }
 
-  // tok[0]=time, 1=lat, 2=N/S, 3=lon, 4=E/W, 5=quality, 6=satellites,
-  // 7=HDOP, 8=altitude(m), 9=M, 10=geoid_sep, 11=M, ...
-  if (ntok < 9)
-    return false;
+  // Check if we have a fix: latitude field non-empty means some data
+  bool has_fix = (tok[0][0] != '\0');
 
-  int quality = atoi(tok[5]);
-  if (quality == 0)
-    return false;
+  if (this->fix_status_sensor_) {
+    if (!has_fix) {
+      this->fix_status_sensor_->publish_state("No Fix");
+    } else {
+      this->fix_status_sensor_->publish_state("Fix");
+    }
+  }
+
+  if (!has_fix)
+    return;
 
   // Latitude: ddmm.mmmmm
-  double lat_raw = atof(tok[1]);
-  if (lat_raw == 0.0)
-    return false;
+  double lat_raw = atof(tok[0]);
   int lat_deg = static_cast<int>(lat_raw / 100);
   double lat_min = lat_raw - lat_deg * 100;
-  double lat = (lat_deg + lat_min / 60.0) * (strcmp(tok[2], "S") == 0 ? -1.0 : 1.0);
+  double lat = (lat_deg + lat_min / 60.0) * (strcmp(tok[1], "S") == 0 ? -1.0 : 1.0);
 
   // Longitude: dddmm.mmmmm
-  double lon_raw = atof(tok[3]);
-  if (lon_raw == 0.0)
-    return false;
+  double lon_raw = atof(tok[2]);
   int lon_deg = static_cast<int>(lon_raw / 100);
   double lon_min = lon_raw - lon_deg * 100;
-  double lon = (lon_deg + lon_min / 60.0) * (strcmp(tok[4], "W") == 0 ? -1.0 : 1.0);
-
-  int satellites = atoi(tok[6]);
-  double hdop = atof(tok[7]);
-  double alt = atof(tok[8]);
+  double lon = (lon_deg + lon_min / 60.0) * (strcmp(tok[3], "W") == 0 ? -1.0 : 1.0);
 
   if (this->latitude_sensor_)
     this->latitude_sensor_->publish_state(static_cast<float>(lat));
   if (this->longitude_sensor_)
     this->longitude_sensor_->publish_state(static_cast<float>(lon));
-  if (this->altitude_sensor_)
-    this->altitude_sensor_->publish_state(static_cast<float>(alt));
-  if (this->satellites_sensor_)
-    this->satellites_sensor_->publish_state(satellites);
-  if (this->hdop_sensor_)
-    this->hdop_sensor_->publish_state(static_cast<float>(hdop));
 
-  ESP_LOGD(TAG, "GPS GGA: lat=%.6f lon=%.6f alt=%.1f sat=%d hdop=%.2f quality=%d",
-           lat, lon, alt, satellites, hdop, quality);
-  return true;
-}
-
-/// Parse RMC fields (CSV): time,status,lat,N/S,lon,E/W,speed,course,date,...
-bool Sim7670gComponent::parse_rmc(const char *fields_csv) {
-  char buf[128];
-  strncpy(buf, fields_csv, sizeof(buf) - 1);
-  buf[sizeof(buf) - 1] = '\0';
-
-  char *tok[16];
-  int ntok = 0;
-  char *saveptr = nullptr;
-  for (char *t = strtok_r(buf, ",", &saveptr); t && ntok < 16;
-       t = strtok_r(nullptr, ",", &saveptr)) {
-    tok[ntok++] = t;
+  // Altitude (field 4, may be empty)
+  if (ntok > 4 && tok[4][0]) {
+    double alt = atof(tok[4]);
+    if (this->altitude_sensor_)
+      this->altitude_sensor_->publish_state(static_cast<float>(alt));
   }
 
-  // tok[0]=time, 1=status, 2=lat, 3=N/S, 4=lon, 5=E/W, 6=speed(knots),
-  // 7=true_course, 8=date(ddmmyy), 9=mag_var, 10=mag_dir, 11=mode
-  if (ntok < 9)
-    return false;
-
-  if (strcmp(tok[1], "A") != 0)
-    return false;  // V = void (no fix)
-
-  // Speed: knots → km/h
-  double speed_knots = atof(tok[6]);
-  double speed_kmh = speed_knots * 1.852;
-
-  if (this->speed_sensor_)
-    this->speed_sensor_->publish_state(static_cast<float>(speed_kmh));
-
-  // Fix status
-  if (this->fix_status_sensor_) {
-    const char *mode = (ntok > 11 && tok[11][0]) ? tok[11] : "";
-    const char *status_str = "No Fix";
-    if (mode[0] == 'A' || mode[0] == '3')
-      status_str = "3D Fix";
-    else if (mode[0] == '2')
-      status_str = "2D Fix";
-    else if (mode[0] == '1')
-      status_str = "GPS Fix";
-    else
-      status_str = "Fix";
-    this->fix_status_sensor_->publish_state(status_str);
-  }
-
-  // DateTime
-  if (this->datetime_sensor_) {
+  // Date/time (fields 5, 6)
+  if (ntok > 6 && tok[5][0] && this->datetime_sensor_) {
     char dt[32];
     int dd, mm, yy;
-    if (sscanf(tok[8], "%2d%2d%2d", &dd, &mm, &yy) == 3) {
+    if (sscanf(tok[5], "%2d%2d%2d", &dd, &mm, &yy) == 3) {
       int year = (yy < 50) ? 2000 + yy : 1900 + yy;
       int hh, mn, ss;
-      if (sscanf(tok[0], "%2d%2d%2d", &hh, &mn, &ss) == 3) {
+      if (sscanf(tok[6], "%2d%2d%2d", &hh, &mn, &ss) == 3) {
         snprintf(dt, sizeof(dt), "%04d-%02d-%02dT%02d:%02d:%02dZ",
                  year, mm, dd, hh, mn, ss);
         this->datetime_sensor_->publish_state(dt);
@@ -224,17 +138,26 @@ bool Sim7670gComponent::parse_rmc(const char *fields_csv) {
     }
   }
 
-  ESP_LOGD(TAG, "GPS RMC: speed=%.1f km/h", speed_kmh);
-  return true;
-}
+  // Speed: knots → km/h (field 7, may be empty)
+  if (ntok > 7 && tok[7][0] && this->speed_sensor_) {
+    double speed_knots = atof(tok[7]);
+    double speed_kmh = speed_knots * 1.852;
+    this->speed_sensor_->publish_state(static_cast<float>(speed_kmh));
+  }
 
-// ---------------------------------------------------------------------------
-// RX Callback (static — called by microlink with each UART read chunk)
-// ---------------------------------------------------------------------------
+  // Satellites (field 9, may be empty — index shifts if some fields missing)
+  // The SIM7670G CGPSINFO format has 10 fields; satellites is the last.
+  // But empty fields still produce tokens from strtok_r... actually no,
+  // consecutive commas produce empty tokens only if the impl does.
+  // Let's check the actual field count.
+  int satellites = 0;
+  if (ntok > 9 && tok[9][0]) {
+    satellites = atoi(tok[9]);
+  }
+  if (this->satellites_sensor_)
+    this->satellites_sensor_->publish_state(satellites);
 
-void Sim7670gComponent::rx_callback(const uint8_t *data, size_t len, void *arg) {
-  Sim7670gComponent *comp = static_cast<Sim7670gComponent *>(arg);
-  comp->feed_nMEA(data, len);
+  ESP_LOGD(TAG, "GPS: lat=%.6f lon=%.6f sat=%d", lat, lon, satellites);
 }
 
 // ---------------------------------------------------------------------------
@@ -272,17 +195,24 @@ void Sim7670gComponent::setup() {
 #endif
 
   if (this->gps_enabled_) {
-    ml_cellular_set_rx_callback(rx_callback, this);
-    ESP_LOGI(TAG, "GPS NMEA parser enabled (RX callback registered)");
+    ESP_LOGI(TAG, "GPS enabled (AT+CGPSINFO polling)");
   }
 }
 
 void Sim7670gComponent::loop() {
   uint32_t now = millis();
-  if (now - this->last_update_ < this->update_interval_ms_)
-    return;
-  this->last_update_ = now;
-  this->update_battery();
+
+  // Battery update
+  if (now - this->last_update_ >= this->update_interval_ms_) {
+    this->last_update_ = now;
+    this->update_battery();
+  }
+
+  // GPS polling
+  if (this->gps_enabled_ && now - this->last_gps_query_ >= GPS_POLL_INTERVAL_MS) {
+    this->last_gps_query_ = now;
+    this->query_gps();
+  }
 }
 
 void Sim7670gComponent::update_battery() {
@@ -307,7 +237,7 @@ void Sim7670gComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "  Battery ADC channel: %u", this->battery_adc_channel_);
   ESP_LOGCONFIG(TAG, "  Voltage divider: %.2f", this->voltage_divider_);
   ESP_LOGCONFIG(TAG, "  Update interval: %u ms", this->update_interval_ms_);
-  ESP_LOGCONFIG(TAG, "  GPS NMEA parser: %s", this->gps_enabled_ ? "enabled" : "disabled");
+  ESP_LOGCONFIG(TAG, "  GPS: %s", this->gps_enabled_ ? "enabled" : "disabled");
 }
 
 }  // namespace sim7670g
