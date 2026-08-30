@@ -1,0 +1,268 @@
+# LILYGO T-SIM7670G-S3 — ESP32-S3 (N16R8) + SIM7670G LTE
+#
+# The ESP32-S3 dials the SIM7670G's cellular (LTE) data link over its UART as
+# PPP, using the microlink's built-in SIM7670G driver (wired in below). That
+# PPP netif is the primary uplink: the Tailscale component (microlink) joins
+# the tailnet over it, and Home Assistant reaches the device at its 100.x.y.z
+# address. The SIM7670G has NO Wi-Fi, so the ESP32-S3's own Wi-Fi radio is a
+# separate, optional fallback uplink (and the "network" component the api
+# component requires) — used to reach the control plane when there is no SIM.
+#
+# See ../README.md for the full setup guide.
+
+esphome:
+  name: t-sim7670g-s3
+  friendly_name: T-SIM7670G-S3 (Cellular + Tailscale)
+
+esp32:
+  # ESP32-S3 WROOM-1 N16R8: 16 MB QUAD (DIO) flash, 8 MB octal PSRAM, 240 MHz.
+  # This is the standard Espressif devkit board ID that matches the
+  # T-SIM7670G-S3 module exactly, so PlatformIO accepts it without a
+  # custom board file.
+  board: esp32-s3-devkitc1-n16r8
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      # Route the ESP-IDF console (all esp_log / ESPHome logs) to the native
+      # USB-Serial/JTAG port (the board's "ESP USB" port) instead of UART0, so
+      # we can read logs over the USB port with no extra UART bridge.
+      CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG: y
+      # The microlink's lwIP tcpip task needs a larger stack than the default.
+      CONFIG_LWIP_TCPIP_TASK_STACK_SIZE: "6144"
+      CONFIG_LWIP_TCPIP_CORE_LOCKING: n
+      # The flash chip is QUAD (GigaDevice 0x2E4018, 4 data lines) and cannot run
+      # in octal/OPI mode. The 8 MB PSRAM is an octal chip, but it is configured in
+      # QUAD mode (see the psram block below) so flash and PSRAM share the same
+      # 4-line SPI bus. An octal PSRAM chip works fine in quad mode (4 of 8 lines).
+  flash_size: 16MB
+
+psram:
+  mode: quad
+  speed: 80MHz
+
+# External components:
+#  - tailscale: the microlink-backed Tailscale component (with the SIM7670G
+#    cellular uplink), pulled from the eddietheengineer fork's cellular branch.
+#    The microlink ESP-IDF component is committed in the same repo (not a
+#    submodule), so a plain git clone includes it and the component's
+#    relative-path lookup (project_root/microlink/components/microlink)
+#    resolves inside the clone.
+#  - sim7670g: the battery-voltage ADC sensor (local, in ../components).
+external_components:
+  - source:
+      type: git
+      url: https://github.com/eddietheengineer/esphome-tailscale
+      ref: feat/sim7670g-cellular-uplink
+      path: components
+    refresh: "1h"
+    components:
+      - tailscale
+  - source:
+      type: local
+      path: ../components
+    components:
+      - sim7670g
+
+# ---------------------------------------------------------------------------
+# Wi-Fi: the ESP32-S3's OWN radio (the SIM7670G has no Wi-Fi). This provides
+# the "network" component the api component requires, and — when there is no
+# SIM — the uplink the Tailscale node uses to reach the control plane and get
+# a tailnet IP. In production (with a SIM) the cellular PPP link is the
+# primary uplink; this Wi-Fi is a fallback. Set wifi_ssid/wifi_password in
+# secrets.yaml to a local network that has internet access.
+# ---------------------------------------------------------------------------
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Pinned to the device's Tailscale IP (set via !secret tailscale_ip) so
+  # ESPHome tooling (the HA ESPHome Builder, the CLI) reaches it over the
+  # tailnet. HA has a Tailscale TUN, so it can route to the 100.x range.
+  # (On the local Wi-Fi LAN the device also has a private IP, but the VPN
+  # address works from anywhere on the tailnet.)
+  use_address: !secret tailscale_ip
+
+# ---------------------------------------------------------------------------
+# Tailscale (microlink) over the SIM7670G cellular (PPP) uplink
+# ---------------------------------------------------------------------------
+tailscale:
+  auth_key: !secret tailscale_auth_key
+  hostname: "t-sim7670g-s3"
+  cellular:
+    enabled: true
+    apn: !secret modem_apn
+    # SIM PIN / PPP CHAP credentials (leave blank for IMSI-based auth).
+    sim_pin: !secret modem_sim_pin
+    ppp_user: !secret modem_ppp_user
+    ppp_pass: !secret modem_ppp_pass
+    # Modem UART / power pins — LilyGo T-SIM7670G-S3 "Standard" SKU pin map
+    # (see the LilyGo wiki). If your board is a different revision and the
+    # modem never answers AT, try the microlink's alternate LILYGO preset:
+    # TX=11 / RX=10 / PWRKEY=18 / DTR=9 (see README "Modem pins").
+    tx_pin: 4
+    rx_pin: 5
+    pwrkey_pin: 46
+    dtr_pin: 7
+
+# ---------------------------------------------------------------------------
+# Battery voltage (ADC1, 2:1 divider on the Standard board)
+# ---------------------------------------------------------------------------
+sim7670g:
+  battery_adc: 8
+  voltage_divider: 2.0
+  update_interval: 30s
+
+# ---------------------------------------------------------------------------
+# Home Assistant integration
+# ---------------------------------------------------------------------------
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+
+# Optional: tiny status page at http://<ip>/ for the first bring-up.
+# Remove once Home Assistant is connected (saves flash/RAM).
+web_server:
+  port: 80
+
+logger:
+  level: INFO
+  baud_rate: 921600
+
+# ---------------------------------------------------------------------------
+# Tailscale / VPN entities
+# ---------------------------------------------------------------------------
+binary_sensor:
+  - platform: tailscale
+    connected:
+      name: "VPN Connected"
+      icon: mdi:shield-check
+      id: tailscale_connected
+    key_expiry_warning:
+      name: "VPN Node Key Expiry Warning"
+      icon: mdi:key-alert
+      id: tailscale_key_expiry_warning
+    ha_connected:
+      name: "HA API Connected"
+      icon: mdi:home-assistant
+      id: tailscale_ha_connected
+    vpn_auto_rollback:
+      name: "VPN Auto-Rollback"
+      icon: mdi:backup-restore
+      id: tailscale_vpn_auto_rollback
+
+text_sensor:
+  - platform: tailscale
+    ip_address:
+      name: "VPN IP"
+      icon: mdi:ip-network
+      id: tailscale_ip_address
+    vpn_hostname:
+      name: "VPN Hostname"
+      icon: mdi:rename-box
+      id: tailscale_vpn_hostname
+    memory_mode:
+      name: "Device Memory"
+      icon: mdi:memory
+      id: tailscale_memory_mode
+    setup_status:
+      name: "VPN Setup Hint"
+      icon: mdi:lightbulb-on-outline
+      id: tailscale_setup_status
+    peer_status:
+      name: "VPN Peer Status"
+      icon: mdi:lan
+      id: tailscale_peer_status
+    magicdns:
+      name: "VPN MagicDNS"
+      icon: mdi:dns
+      id: tailscale_magicdns
+    network_name:
+      name: "VPN Network"
+      icon: mdi:network-outline
+      id: tailscale_network_name
+    key_expiry:
+      name: "VPN Node Key Expiry"
+      icon: mdi:calendar-clock
+      id: tailscale_key_expiry
+    ha_connection_route:
+      name: "HA API Connection Route"
+      icon: mdi:routes
+      id: tailscale_ha_connection_route
+    ha_connection_ip:
+      name: "HA API Connection IP"
+      icon: mdi:ip-network-outline
+      id: tailscale_ha_connection_ip
+    control_plane:
+      name: "VPN Control Plane"
+      icon: mdi:cloud-cog-outline
+      id: tailscale_control_plane
+    login_server:
+      name: "VPN Login Server"
+      icon: mdi:login-variant
+      id: tailscale_login_server
+    auth_key_status:
+      name: "VPN Auth Key Source"
+      icon: mdi:shield-key-outline
+      id: tailscale_auth_key_status
+
+text:
+  - platform: tailscale
+    auth_key:
+      name: "VPN Auth Key Override"
+      icon: mdi:key-variant
+      id: tailscale_auth_key_override
+      mode: password
+
+button:
+  - platform: tailscale
+    reconnect:
+      name: "VPN Reconnect"
+      icon: mdi:connection
+      id: tailscale_reconnect
+  - platform: restart
+    name: "Reboot"
+
+sensor:
+  - platform: sim7670g
+    battery_voltage:
+      name: "Battery Voltage"
+  - platform: tailscale
+    peers_online:
+      name: "VPN Peers Online"
+      icon: mdi:account-network
+      id: tailscale_peers_online
+    peers_direct:
+      name: "VPN Peers Direct"
+      icon: mdi:lan-connect
+      id: tailscale_peers_direct
+    peers_derp:
+      name: "VPN Peers DERP"
+      icon: mdi:server-network
+      id: tailscale_peers_derp
+    peers_max:
+      name: "VPN Peers Max"
+      icon: mdi:account-multiple
+      id: tailscale_peers_max
+    uptime:
+      name: "VPN Uptime"
+      icon: mdi:timer-outline
+      id: tailscale_uptime
+    connections:
+      name: "VPN Connect Count"
+      icon: mdi:counter
+      id: tailscale_connections
+
+switch:
+  - platform: tailscale
+    vpn_enabled:
+      name: "VPN Enabled"
+      icon: mdi:vpn
+      id: tailscale_vpn_enabled
+    debug_log:
+      name: "VPN Debug Log"
+      icon: mdi:bug-outline
+      id: tailscale_debug_log
+      restore_mode: RESTORE_DEFAULT_OFF

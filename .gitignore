@@ -1,0 +1,18 @@
+# --- ESPHome / PlatformIO build artifacts ---------------------------------
+.esphome/
+
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+
+# --- Secrets: never commit real credentials -------------------------------
+secrets.yaml
+
+# --- Vendored external clones (fetched from their git URL at build time) --
+vendor/
+
+# --- Editor / OS cruft -----------------------------------------------------
+*.swp
+*.swo
+*~
+.DS_Store

@@ -1,0 +1,45 @@
+# Minimal test: does ESPHome build with NO wifi/ethernet (only cellular + api)?
+esphome:
+  name: test-no-wifi
+  friendly_name: test-no-wifi
+
+esp32:
+  board: esp32-s3-devkitc1-n16r8
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG: y
+      CONFIG_LWIP_TCPIP_TASK_STACK_SIZE: "6144"
+      CONFIG_LWIP_TCPIP_CORE_LOCKING: n
+  flash_size: 16MB
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/eddietheengineer/esphome-tailscale
+      ref: feat/sim7670g-cellular-uplink
+      path: components
+    components:
+      - tailscale
+
+tailscale:
+  auth_key: !secret tailscale_auth_key
+  hostname: "test-no-wifi"
+  cellular:
+    enabled: true
+    apn: "internet"
+    tx_pin: 4
+    rx_pin: 5
+    pwrkey_pin: 46
+    dtr_pin: 7
+
+api:
+
+logger:
+  level: INFO
+  baud_rate: 921600
