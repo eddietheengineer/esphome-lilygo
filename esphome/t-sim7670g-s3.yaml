@@ -48,7 +48,8 @@ psram:
 #    submodule), so a plain git clone includes it and the component's
 #    relative-path lookup (project_root/microlink/components/microlink)
 #    resolves inside the clone.
-#  - sim7670g: the battery-voltage ADC sensor (local, in ../components).
+#  - sim7670g: the battery-voltage ADC sensor, pulled from the esphome-lilygo
+#    repo (same author as the tailscale component).
 external_components:
   - source:
       type: git
@@ -59,8 +60,10 @@ external_components:
     components:
       - tailscale
   - source:
-      type: local
-      path: ../components
+      type: git
+      url: https://github.com/eddietheengineer/esphome-lilygo
+      path: components
+    refresh: "1h"
     components:
       - sim7670g
 
@@ -208,6 +211,14 @@ text_sensor:
       icon: mdi:shield-key-outline
       id: tailscale_auth_key_status
 
+  - platform: sim7670g
+    datetime:
+      name: "GPS DateTime"
+      icon: mdi:clock-outline
+    fix_status:
+      name: "GPS Fix Status"
+      icon: mdi:signal
+
 text:
   - platform: tailscale
     auth_key:
@@ -229,6 +240,24 @@ sensor:
   - platform: sim7670g
     battery_voltage:
       name: "Battery Voltage"
+    latitude:
+      name: "GPS Latitude"
+      icon: mdi:latitude
+    longitude:
+      name: "GPS Longitude"
+      icon: mdi:longitude
+    altitude:
+      name: "GPS Altitude"
+      icon: mdi:upload-off
+    speed:
+      name: "GPS Speed"
+      icon: mdi:speedometer
+    satellites:
+      name: "GPS Satellites"
+      icon: mdi:satellite-variant
+    hdop:
+      name: "GPS HDOP"
+      icon: mdi:signal-distance-variant
   - platform: tailscale
     peers_online:
       name: "VPN Peers Online"
