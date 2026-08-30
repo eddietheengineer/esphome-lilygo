@@ -6,17 +6,24 @@
 #include <cstdlib>
 #include <cstdio>
 
+#ifdef USE_ESP32
+extern "C" {
+#include "ml_cellular.h"
+}
+#endif
+
 namespace esphome {
 namespace sim7670g {
 
 static const char *const TAG = "sim7670g";
 
-// GPS UART pins for T-SIM7670G-S3 Standard board
-// Modem GPS TX → ESP32 GPIO45 (RX), ESP32 GPIO48 (TX) → Modem GPS RX
-static constexpr uart_port_t GPS_UART = UART_NUM_2;
-static constexpr int GPS_RX_PIN = 45;  // ESP32 RX ← modem GPS TX
-static constexpr int GPS_TX_PIN = 48;  // ESP32 TX → modem GPS RX
-static constexpr int GPS_BAUD = 9600;  // SIM7670G default NMEA baud is 9600
+// Global pointer for C callback → C++ instance bridge
+static Sim7670gComponent *s_sim7670g_instance = nullptr;
+
+static void modem_rx_callback(const uint8_t *data, size_t len, void *arg) {
+  if (s_sim7670g_instance)
+    s_sim7670g_instance->feed_modem_data(data, len);
+}
 
 // ---------------------------------------------------------------------------
 // NMEA Parser
@@ -81,7 +88,6 @@ bool Sim7670gComponent::parse_nmea_line(const char *line) {
   const char *star = strchr(line, '*');
 
   auto extract_fields = [line, star, type](char *out, size_t out_size) {
-    // Fields start after "GGA," or "RMC," (talker=2 + type=3 + comma=1 = 6)
     const char *fields_start = type + 6;
     size_t fields_len = star ? (size_t)(star - fields_start) : strlen(fields_start);
     while (fields_len > 0 && (line[fields_start - line + fields_len - 1] == '\r' ||
@@ -120,8 +126,6 @@ bool Sim7670gComponent::parse_gga(const char *fields_csv) {
     tok[ntok++] = t;
   }
 
-  // tok[0]=time, 1=lat, 2=N/S, 3=lon, 4=E/W, 5=quality, 6=satellites,
-  // 7=HDOP, 8=altitude(m), 9=M, ...
   if (ntok < 9)
     return false;
 
@@ -177,8 +181,6 @@ bool Sim7670gComponent::parse_rmc(const char *fields_csv) {
     tok[ntok++] = t;
   }
 
-  // tok[0]=time, 1=status, 2=lat, 3=N/S, 4=lon, 5=E/W, 6=speed(knots),
-  // 7=true_course, 8=date(ddmmyy), 9=mag_var, 10=mag_dir, 11=mode
   if (ntok < 9)
     return false;
 
@@ -224,36 +226,16 @@ bool Sim7670gComponent::parse_rmc(const char *fields_csv) {
 }
 
 // ---------------------------------------------------------------------------
-// GPS RX Task (reads dedicated GPS UART)
+// Modem Data Feed (from microlink RX callback)
 // ---------------------------------------------------------------------------
 
-#ifdef USE_ESP32
-void Sim7670gComponent::gps_rx_task(void *arg) {
-  Sim7670gComponent *comp = static_cast<Sim7670gComponent *>(arg);
-  uint8_t rx_buf[256];
-  uint32_t total_bytes = 0;
-  uint32_t last_log = 0;
+void Sim7670gComponent::feed_modem_data(const uint8_t *data, size_t len) {
+  if (!this->gps_enabled_)
+    return;
 
-  ESP_LOGI(TAG, "GPS RX task started on core 1");
-
-  while (true) {
-    int len = uart_read_bytes(GPS_UART, rx_buf, sizeof(rx_buf), pdMS_TO_TICKS(100));
-    if (len > 0) {
-      total_bytes += len;
-      comp->feed_nMEA(rx_buf, len);
-    }
-
-    // Log periodic status
-    uint32_t now = millis();
-    if (now - last_log >= 30000) {
-      ESP_LOGI(TAG, "GPS UART: %lu bytes received total", (unsigned long)total_bytes);
-      last_log = now;
-    }
-
-    vTaskDelay(pdMS_TO_TICKS(10));
-  }
+  // Feed NMEA parser for $GPGGA/$GNRMC sentences from the AT UART stream
+  this->feed_nMEA(data, len);
 }
-#endif
 
 // ---------------------------------------------------------------------------
 // ESPHome Component Lifecycle
@@ -286,42 +268,15 @@ void Sim7670gComponent::setup() {
   this->adc_ready_ = true;
   ESP_LOGI(TAG, "Battery ADC ready on channel %u (divider %.2f)", this->battery_adc_channel_,
            this->voltage_divider_);
+#endif
 
-  // GPS UART (dedicated GPS UART on GPIO 45/48)
-  if (this->gps_enabled_) {
-    uart_config_t gps_uart_config = {
-        .baud_rate = GPS_BAUD,
-        .data_bits = UART_DATA_8_BITS,
-        .parity    = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_DEFAULT,
-    };
-
-    esp_err_t err = uart_param_config(GPS_UART, &gps_uart_config);
-    if (err != ESP_OK) {
-      ESP_LOGW(TAG, "GPS UART param config failed: %s", esp_err_to_name(err));
-    } else {
-      err = uart_driver_install(GPS_UART, 2048, 0, 0, nullptr, 0);
-      if (err != ESP_OK) {
-        ESP_LOGW(TAG, "GPS UART driver install failed: %s", esp_err_to_name(err));
-      } else {
-        err = uart_set_pin(GPS_UART, GPS_TX_PIN, GPS_RX_PIN,
-                           UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-        if (err != ESP_OK) {
-          ESP_LOGW(TAG, "GPS UART set pin failed: %s", esp_err_to_name(err));
-        } else {
-          // Start GPS RX task
-          xTaskCreatePinnedToCore(gps_rx_task, "gps_rx", 2048, this,
-                                   1, &this->gps_task_, 1);
-          ESP_LOGI(TAG, "GPS UART ready (UART2: TX=GPIO%d, RX=GPIO%d, %d baud)",
-                   GPS_TX_PIN, GPS_RX_PIN, GPS_BAUD);
-        }
-      }
-    }
-  }
+  // Register as microlink RX callback to receive modem UART data (NMEA sentences)
+#ifdef USE_ESP32
+  s_sim7670g_instance = this;
+  ml_cellular_set_rx_callback(modem_rx_callback, nullptr);
+  ESP_LOGI(TAG, "GPS NMEA parser enabled (RX callback registered with microlink)");
 #else
-  this->mark_failed();
+  ESP_LOGI(TAG, "GPS NMEA parser enabled");
 #endif
 }
 
@@ -345,7 +300,6 @@ void Sim7670gComponent::update_battery() {
     return;
   }
 
-  // ADC12: 0-4095 maps to 0-1.1V (with ATTEN_DB_12)
   float v_raw = (adc_val / 4095.0f) * 1.1f * this->voltage_divider_;
   this->battery_sensor_->publish_state(v_raw);
 #endif
