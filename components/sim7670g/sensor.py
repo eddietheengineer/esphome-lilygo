@@ -7,7 +7,7 @@ from esphome.const import (
     UNIT_VOLT,
     UNIT_DEGREES,
     UNIT_METER,
-    UNIT_KILOMETERS_PER_HOUR,
+    UNIT_KILOMETER_PER_HOUR,
 )
 
 from . import Sim7670gComponent
@@ -39,8 +39,7 @@ GPS_ALT_SCHEMA = sensor.sensor_schema(
     state_class=STATE_CLASS_MEASUREMENT,
 )
 GPS_SPEED_SCHEMA = sensor.sensor_schema(
-    unit_of_measurement=UNIT_KILOMETERS_PER_HOUR,
-    accuracy_decimals=1,
+    unit_of_measurement=UNIT_KILOMETER_PER_HOUR,
     state_class=STATE_CLASS_MEASUREMENT,
 )
 GPS_SAT_SCHEMA = sensor.sensor_schema(
