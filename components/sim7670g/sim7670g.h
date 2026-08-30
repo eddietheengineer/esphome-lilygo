@@ -10,35 +10,27 @@
 
 #ifdef USE_ESP32
 #include "esp_adc/adc_oneshot.h"
+#include "driver/uart.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
 #endif
 
 // Forward-declare microlink AT command API.
 extern "C" {
   int ml_cellular_send_at(const char *cmd, char *response, size_t resp_size, int timeout_ms);
-  typedef enum {
-      ML_CELL_STATE_OFF,
-      ML_CELL_STATE_INIT,
-      ML_CELL_STATE_AT_OK,
-      ML_CELL_STATE_SIM_READY,
-      ML_CELL_STATE_REGISTERED,
-      ML_CELL_STATE_PPP_CONNECTING,
-      ML_CELL_STATE_PPP_CONNECTED,
-      ML_CELL_STATE_DATA_CONNECTED,
-      ML_CELL_STATE_ERROR,
-  } ml_cellular_state_t;
-  ml_cellular_state_t ml_cellular_get_state(void);
 }
 
 namespace esphome {
 namespace sim7670g {
 
-/// LILYGO T-SIM7670G-S3 component: battery ADC + GPS via AT+CGPSINFO polling.
+/// LILYGO T-SIM7670G-S3 component: battery ADC + GPS NMEA parser.
 ///
 /// Battery: reads the board's battery voltage from its ADC pin.
-/// GPS: powers on the SIM7670G GNSS engine (AT+CGNSSPWR=1) during setup,
-///     then periodically polls AT+CGPSINFO to get the last fix. Polling only
-///     works when the modem is NOT in PPP mode (AT command phase or AT socket
-///     fallback). During PPP mode the UART carries PPP data — GPS is unavailable.
+/// GPS: reads NMEA sentences from the modem's dedicated GPS UART (UART2,
+///     GPIO 45/48 on the Standard board). This is a separate physical UART
+///     from the AT/PPP UART, so GPS works simultaneously with cellular data.
+///     Powers on GNSS via AT+CGNSSPWR=1 on the modem's AT UART.
 class Sim7670gComponent : public Component {
  public:
   // Battery
@@ -66,8 +58,14 @@ class Sim7670gComponent : public Component {
   void dump_config() override;
 
  private:
+#ifdef USE_ESP32
+  static void gps_rx_task(void *arg);
+#endif
+  void feed_nMEA(const uint8_t *data, size_t len);
+  bool parse_nmea_line(const char *line);
+  bool parse_gga(const char *fields_csv);
+  bool parse_rmc(const char *fields_csv);
   void update_battery();
-  void query_gps();
 
   // Battery
   uint8_t battery_adc_channel_{8};
@@ -81,14 +79,16 @@ class Sim7670gComponent : public Component {
 #endif
   sensor::Sensor *battery_sensor_{nullptr};
 
-  // GPS
   bool gps_enabled_{true};
   bool gnss_powered_{false};
-  uint32_t last_gps_query_{0};
-  // Poll every 60s — AT+CGPSINFO is a blocking AT command.
-  static constexpr uint32_t GPS_POLL_INTERVAL_MS = 60000;
-  // Delay first query to give GNSS time to acquire after powering on.
-  static constexpr uint32_t GPS_INITIAL_DELAY_MS = 30000;
+
+  // NMEA line buffer
+  char nmea_buf_[128];
+  size_t nmea_buf_len_{0};
+
+#ifdef USE_ESP32
+  TaskHandle_t gps_task_{nullptr};
+#endif
 
   // GPS sensors
   sensor::Sensor *latitude_sensor_{nullptr};
