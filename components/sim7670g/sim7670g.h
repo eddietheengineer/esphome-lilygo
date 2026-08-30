@@ -79,6 +79,7 @@ class Sim7670gComponent : public Component {
   bool gnss_powered_{false};
 
   // NMEA line buffer
+  char nmea_buf_[128];
   size_t nmea_buf_len_{0};
 
 #ifdef USE_ESP32

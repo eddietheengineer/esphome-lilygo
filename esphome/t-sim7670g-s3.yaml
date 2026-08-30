@@ -62,6 +62,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/eddietheengineer/esphome-lilygo
+      ref: feat/gps
       path: components
     refresh: "1h"
     components:

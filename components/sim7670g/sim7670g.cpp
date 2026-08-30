@@ -259,6 +259,7 @@ void Sim7670gComponent::gps_rx_task(void *arg) {
 // ESPHome Component Lifecycle
 // ---------------------------------------------------------------------------
 
+void Sim7670gComponent::setup() {
 #ifdef USE_ESP32
   // Battery ADC
   adc_oneshot_unit_init_cfg_t init_config = {
