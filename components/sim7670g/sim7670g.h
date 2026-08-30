@@ -16,11 +16,6 @@
 #include "freertos/semphr.h"
 #endif
 
-// Forward-declare microlink AT command API.
-extern "C" {
-  int ml_cellular_send_at(const char *cmd, char *response, size_t resp_size, int timeout_ms);
-  int ml_cellular_get_state(void);
-}
 
 namespace esphome {
 namespace sim7670g {
@@ -84,7 +79,6 @@ class Sim7670gComponent : public Component {
   bool gnss_powered_{false};
 
   // NMEA line buffer
-  char nmea_buf_[128];
   size_t nmea_buf_len_{0};
 
 #ifdef USE_ESP32
