@@ -231,11 +231,25 @@ bool Sim7670gComponent::parse_rmc(const char *fields_csv) {
 void Sim7670gComponent::gps_rx_task(void *arg) {
   Sim7670gComponent *comp = static_cast<Sim7670gComponent *>(arg);
   uint8_t buf[256];
+  uint32_t bytes_total = 0;
+  uint32_t last_report = 0;
 
   while (true) {
     int len = uart_read_bytes(GPS_UART, buf, sizeof(buf), pdMS_TO_TICKS(100));
     if (len > 0) {
+      bytes_total += len;
       comp->feed_nMEA(buf, len);
+      // Log first NMEA line received
+      if (bytes_total < 200) {
+        ESP_LOGD(TAG, "GPS UART received %d bytes (total %lu): %.60s",
+                 len, bytes_total, (const char *)buf);
+      }
+    }
+    // Periodic status report every 30s
+    uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    if (now - last_report >= 30000) {
+      last_report = now;
+      ESP_LOGI(TAG, "GPS UART: %lu bytes received total", bytes_total);
     }
   }
 }
