@@ -313,13 +313,22 @@ void Sim7670gComponent::gps_rx_task(void *arg) {
 void Sim7670gComponent::loop() {
   uint32_t now = millis();
 
-  // Power on GNSS once (deferred until modem is ready)
+  // Power on GNSS once (deferred until modem is in AT mode, before PPP dials)
   if (this->gps_enabled_ && !this->gnss_powered_) {
-    char resp[256];
-    int len = ml_cellular_send_at("AT+CGNSSPWR=1", resp, sizeof(resp), 5000);
-    if (len > 0 && strstr(resp, "OK")) {
-      this->gnss_powered_ = true;
-      ESP_LOGI(TAG, "GNSS powered on");
+    // ML_CELL_STATE_REGISTERED = 4 (AT commands still work, before PPP)
+    // ML_CELL_STATE_PPP_CONNECTING = 5, ML_CELL_STATE_PPP_CONNECTED = 6
+    int state = ml_cellular_get_state();
+    if (state >= 0 && state < 5) {
+      static uint32_t last_try = 0;
+      if (now - last_try >= 5000) {
+        last_try = now;
+        char resp[256];
+        int len = ml_cellular_send_at("AT+CGNSSPWR=1", resp, sizeof(resp), 5000);
+        if (len > 0 && strstr(resp, "OK")) {
+          this->gnss_powered_ = true;
+          ESP_LOGI(TAG, "GNSS powered on");
+        }
+      }
     }
   }
 

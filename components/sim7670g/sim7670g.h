@@ -19,6 +19,7 @@
 // Forward-declare microlink AT command API.
 extern "C" {
   int ml_cellular_send_at(const char *cmd, char *response, size_t resp_size, int timeout_ms);
+  int ml_cellular_get_state(void);
 }
 
 namespace esphome {
