@@ -2,12 +2,12 @@
 
 Handles:
   - Battery voltage ADC sensor
-  - GPS via AT+CGPSINFO polling of the SIM7670G modem
+  - GPS via NMEA on the modem's dedicated GPS UART (UART2, GPIO 45/48)
 
 The cellular data path is handled by the microlink (Tailscale) component's
-built-in SIM7670G PPP driver. GPS is polled via AT+CGPSINFO when the modem
-is in AT command mode (before PPP dials or in AT socket fallback). During
-PPP mode the UART carries PPP data — GPS is unavailable.
+built-in SIM7670G PPP driver. GPS NMEA is read from a separate physical UART
+(UART2) that is independent of the AT/PPP UART, so GPS works simultaneously
+with cellular data. GNSS is powered on via AT+CGNSSPWR=1 on the AT UART.
 """
 
 import esphome.codegen as cg

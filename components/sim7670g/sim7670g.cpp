@@ -315,10 +315,11 @@ void Sim7670gComponent::loop() {
 
   // Power on GNSS once (deferred until modem is in AT mode, before PPP dials)
   if (this->gps_enabled_ && !this->gnss_powered_) {
-    // ML_CELL_STATE_REGISTERED = 4 (AT commands still work, before PPP)
-    // ML_CELL_STATE_PPP_CONNECTING = 5, ML_CELL_STATE_PPP_CONNECTED = 6
+    // ML_CELL_STATE_OFF=0, INIT=1, AT_OK=2, SIM_READY=3, REGISTERED=4
+    // ML_CELL_STATE_PPP_CONNECTING=5, PPP_CONNECTED=6, DATA_CONNECTED=7
+    // Only try when modem has AT_OK (2) but not yet PPP_CONNECTING (5).
     int state = ml_cellular_get_state();
-    if (state >= 0 && state < 5) {
+    if (state >= 2 && state < 5) {
       static uint32_t last_try = 0;
       if (now - last_try >= 5000) {
         last_try = now;
@@ -327,6 +328,8 @@ void Sim7670gComponent::loop() {
         if (len > 0 && strstr(resp, "OK")) {
           this->gnss_powered_ = true;
           ESP_LOGI(TAG, "GNSS powered on");
+        } else {
+          ESP_LOGD(TAG, "GNSS power-on attempt failed (state=%d, len=%d)", state, len);
         }
       }
     }
