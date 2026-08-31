@@ -16,15 +16,12 @@
 namespace esphome {
 namespace sim7670g {
 
-/// LILYGO T-SIM7670G-S3 component: battery ADC + GPS via microlink RX callback.
+/// LILYGO T-SIM7670G-S3 component: battery ADC + GPS from microlink info.
 ///
 /// Battery: reads the board's battery voltage from its ADC pin.
-/// GPS: receives NMEA sentences from the microlink's RX callback. The
-///     SIM7670G outputs NMEA on the AT UART (same UART as AT commands/PPP),
-///     not on a dedicated GPS UART. The microlink sends AT commands to
-///     initialize GNSS (AT+CGNSSPWR=1, AT+CGNSSTST=1, etc.) during the
-///     registration phase. NMEA sentences are captured from the UART data
-///     stream via the RX callback.
+/// GPS: reads position data from the microlink's cellular info struct.
+///     The microlink polls AT+CGPSINFO during the AT phase (before PPP dials)
+///     and stores the result. This component reads it and publishes to sensors.
 class Sim7670gComponent : public Component {
  public:
   // Battery
@@ -46,8 +43,8 @@ class Sim7670gComponent : public Component {
   void set_datetime_sensor(text_sensor::TextSensor *s) { this->datetime_sensor_ = s; }
   void set_fix_status_sensor(text_sensor::TextSensor *s) { this->fix_status_sensor_ = s; }
 
-  /// Feed modem UART data (from microlink RX callback) for GPS parsing.
-  void feed_modem_data(const uint8_t *data, size_t len);
+  /// Publish GPS data from microlink info struct.
+  void publish_gps_data();
 
   float get_setup_priority() const override { return setup_priority::DATA; }
   void setup() override;
@@ -55,10 +52,6 @@ class Sim7670gComponent : public Component {
   void dump_config() override;
 
  private:
-  void feed_nMEA(const uint8_t *data, size_t len);
-  bool parse_nmea_line(const char *line);
-  bool parse_gga(const char *fields_csv);
-  bool parse_rmc(const char *fields_csv);
   void update_battery();
 
   // Battery
@@ -74,10 +67,7 @@ class Sim7670gComponent : public Component {
   sensor::Sensor *battery_sensor_{nullptr};
 
   bool gps_enabled_{true};
-
-  // NMEA line buffer
-  char nmea_buf_[128];
-  size_t nmea_buf_len_{0};
+  bool gps_published_{false};  // GPS data published once after microlink has it
 
   // GPS sensors
   sensor::Sensor *latitude_sensor_{nullptr};
