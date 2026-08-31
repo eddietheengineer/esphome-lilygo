@@ -26,7 +26,7 @@ void Sim7670gComponent::setup() {
     return;
   }
   adc_oneshot_chan_cfg_t chan_config = {
-      .atten = ADC_ATTEN_DB_12,
+      .atten = ADC_ATTEN_DB_11,
       .bitwidth = ADC_BITWIDTH_12,
   };
   if (adc_oneshot_config_channel(this->adc_handle_,
@@ -109,11 +109,17 @@ void Sim7670gComponent::update_battery() {
     return;
   }
 
-  float v_raw = (adc_val / 4095.0f) * 1.1f * this->voltage_divider_;
-  this->battery_sensor_->publish_state(v_raw);
+  // LilyGo board: 2:1 voltage divider on battery ADC pin.
+  // With ADC_ATTEN_DB_11, the ADC reference is 1100mV.
+  // analogReadMilliVolts() in Arduino returns calibrated mV.
+  // In ESP-IDF, adc_oneshot_read() returns raw digital value (0-4095).
+  // Convert: v_pin_mv = adc_val * 1100 / 4095 (linear approx, no curve fitting).
+  // Then multiply by voltage_divider_ (2.0) for actual battery voltage.
+  ESP_LOGI(TAG, "Battery ADC raw=%d", adc_val);
+  float v_pin_mv = adc_val * (1100.0f / 4095.0f);
+  float v_battery = (v_pin_mv * this->voltage_divider_) / 1000.0f;
 #endif
 }
-
 void Sim7670gComponent::dump_config() {
   LOG_SENSOR("  ", "Battery Voltage", this->battery_sensor_);
   if (this->gps_enabled_) {

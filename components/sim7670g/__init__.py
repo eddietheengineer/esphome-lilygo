@@ -33,11 +33,12 @@ CONF_GPS = "gps"
 
 
 def _validate_adc_channel(value):
-    """The battery ADC must be an ESP32-S3 ADC1 channel (GPIO1-GPIO10)."""
+    """The battery ADC must be an ESP32-S3 ADC1 GPIO (GPIO1-GPIO10).
+    Converts GPIO number to ADC1 channel number (channel = GPIO - 1)."""
     value = cv.int_(value)
     if not 1 <= value <= 10:
-        raise cv.Invalid("battery_adc must be GPIO1-GPIO10 (ADC1 channels on ESP32-S3)")
-    return value
+        raise cv.Invalid("battery_adc must be GPIO1-GPIO10 (ADC1 pins on ESP32-S3)")
+    return value - 1  # GPIO N maps to ADC1 channel N-1 on ESP32-S3
 
 
 CONFIG_SCHEMA = cv.Schema(
