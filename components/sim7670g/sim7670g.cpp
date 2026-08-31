@@ -68,8 +68,14 @@ void Sim7670gComponent::publish_gps_data() {
   if (ml_cellular_get_info(&info) != ESP_OK)
     return;
 
-  if (!info.gps_has_fix) {
-    // GNSS hasn't acquired a fix yet; will retry next loop
+  // Publish GPS data regardless of fix status — satellites > 0 means GNSS is working
+  // even if no position fix yet (cold start indoors can take minutes).
+  ESP_LOGD(TAG, "GPS poll: has_fix=%d sat=%d lat=%.4f lon=%.4f",
+           (int)info.gps_has_fix, info.gps_satellites,
+           info.gps_latitude, info.gps_longitude);
+
+  if (info.gps_latitude == 0.0 && info.gps_longitude == 0.0 && info.gps_satellites == 0) {
+    // No GPS data yet (GNSS not initialized or no satellites)
     return;
   }
 
@@ -89,13 +95,13 @@ void Sim7670gComponent::publish_gps_data() {
     this->hdop_sensor_->publish_state(static_cast<float>(info.gps_hdop));
 
   if (this->fix_status_sensor_) {
-    const char *status_str = info.gps_satellites > 0 ? "3D Fix" : "No Fix";
+    const char *status_str = info.gps_has_fix ? "3D Fix" : "No Fix";
     this->fix_status_sensor_->publish_state(status_str);
   }
 
-  ESP_LOGI(TAG, "GPS: lat=%.6f lon=%.6f alt=%.1f speed=%.1f sat=%d hdop=%.2f",
+  ESP_LOGI(TAG, "GPS: lat=%.6f lon=%.6f alt=%.1f speed=%.1f sat=%d hdop=%.2f fix=%d",
            info.gps_latitude, info.gps_longitude, info.gps_altitude,
-           info.gps_speed, info.gps_satellites, info.gps_hdop);
+           info.gps_speed, info.gps_satellites, info.gps_hdop, (int)info.gps_has_fix);
 #endif
 }
 
