@@ -56,12 +56,16 @@ void Sim7670gComponent::loop() {
     this->update_battery();
   }
 
-  // Try to publish GPS data once microlink has it (after cellular init)
+  // Periodically check for GPS data from microlink info struct.
+  // Poll every 10s until we get data, then stop polling.
   if (this->gps_enabled_ && !this->gps_published_) {
-    this->publish_gps_data();
+    static uint32_t last_gps_check = 0;
+    if (now - last_gps_check >= 10000) {
+      last_gps_check = now;
+      this->publish_gps_data();
+    }
   }
 }
-
 void Sim7670gComponent::publish_gps_data() {
 #ifdef USE_ESP32
   ml_cellular_info_t info;
