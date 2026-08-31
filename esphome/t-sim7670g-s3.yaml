@@ -212,13 +212,6 @@ text_sensor:
       icon: mdi:shield-key-outline
       id: tailscale_auth_key_status
 
-  - platform: sim7670g
-    datetime:
-      name: "GPS DateTime"
-      icon: mdi:clock-outline
-    fix_status:
-      name: "GPS Fix Status"
-      icon: mdi:signal
 
 text:
   - platform: tailscale
@@ -241,24 +234,6 @@ sensor:
   - platform: sim7670g
     battery_voltage:
       name: "Battery Voltage"
-    latitude:
-      name: "GPS Latitude"
-      icon: mdi:latitude
-    longitude:
-      name: "GPS Longitude"
-      icon: mdi:longitude
-    altitude:
-      name: "GPS Altitude"
-      icon: mdi:upload-off
-    speed:
-      name: "GPS Speed"
-      icon: mdi:speedometer
-    satellites:
-      name: "GPS Satellites"
-      icon: mdi:satellite-variant
-    hdop:
-      name: "GPS HDOP"
-      icon: mdi:signal-distance-variant
   - platform: tailscale
     peers_online:
       name: "VPN Peers Online"

@@ -2,13 +2,14 @@
 
 Handles:
   - Battery voltage ADC sensor
-  - GPS via NMEA on the modem's dedicated GPS UART (UART2, GPIO 45/48)
+
+GPS support is available but disabled by default. The SIM7670G outputs NMEA
+on the AT UART (shared with cellular data), which means GPS only works in
+AT socket mode — not during PPP (Tailscale). To enable GPS, set `gps: true`
+and use AT socket mode instead of PPP.
 
 The cellular data path is handled by the microlink (Tailscale) component's
-built-in SIM7670G PPP driver. GPS NMEA is read from a separate physical UART
-(UART2) that is independent of the AT/PPP UART, so GPS works simultaneously
-with cellular data. GNSS is powered on via AT commands on the AT UART
-(AT+CGNSSPWR=1, AT+CGNSSPORTSWITCH=2, AT+CGPS=1,1) sent by the microlink.
+built-in SIM7670G PPP driver.
 """
 
 import esphome.codegen as cg
@@ -21,7 +22,7 @@ from esphome.components.esp32 import include_builtin_idf_component
 
 CODEOWNERS = []
 DEPENDENCIES = ["esp32"]
-AUTO_LOAD = ["sensor", "text_sensor"]
+AUTO_LOAD = ["sensor"]
 
 sim7670g_ns = cg.esphome_ns.namespace("sim7670g")
 Sim7670gComponent = sim7670g_ns.class_("Sim7670gComponent", cg.Component)
@@ -45,7 +46,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Required(CONF_BATTERY_ADC): _validate_adc_channel,
         cv.Optional(CONF_VOLTAGE_DIVIDER, default=2.0): cv.positive_float,
         cv.Optional(CONF_UPDATE_INTERVAL, default="30s"): cv.positive_time_period_milliseconds,
-        cv.Optional(CONF_GPS, default=True): cv.boolean,
+        cv.Optional(CONF_GPS, default=False): cv.boolean,
     }
 ).extend(cv.COMPONENT_SCHEMA)
 

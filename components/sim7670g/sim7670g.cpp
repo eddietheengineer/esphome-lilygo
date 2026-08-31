@@ -13,13 +13,8 @@ namespace sim7670g {
 
 static const char *const TAG = "sim7670g";
 
-// ---------------------------------------------------------------------------
-// ESPHome Component Lifecycle
-// ---------------------------------------------------------------------------
-
 void Sim7670gComponent::setup() {
 #ifdef USE_ESP32
-  // Battery ADC
   adc_oneshot_unit_init_cfg_t init_config = {
       .unit_id = ADC_UNIT_1,
       .clk_src = ADC_RTC_CLK_SRC_DEFAULT,
@@ -46,7 +41,9 @@ void Sim7670gComponent::setup() {
            this->voltage_divider_);
 #endif
 
-  ESP_LOGI(TAG, "GPS sensor enabled (reads from microlink info struct)");
+  if (this->gps_enabled_) {
+    ESP_LOGW(TAG, "GPS enabled but only works in AT socket mode (not PPP/Tailscale)");
+  }
 }
 
 void Sim7670gComponent::loop() {
@@ -56,8 +53,6 @@ void Sim7670gComponent::loop() {
     this->update_battery();
   }
 
-  // Periodically check for GPS data from microlink info struct.
-  // Poll every 10s until we get data, then stop polling.
   if (this->gps_enabled_ && !this->gps_published_) {
     static uint32_t last_gps_check = 0;
     if (now - last_gps_check >= 10000) {
@@ -66,22 +61,15 @@ void Sim7670gComponent::loop() {
     }
   }
 }
+
 void Sim7670gComponent::publish_gps_data() {
 #ifdef USE_ESP32
   ml_cellular_info_t info;
   if (ml_cellular_get_info(&info) != ESP_OK)
     return;
 
-  // Publish GPS data regardless of fix status — satellites > 0 means GNSS is working
-  // even if no position fix yet (cold start indoors can take minutes).
-  ESP_LOGD(TAG, "GPS poll: has_fix=%d sat=%d lat=%.4f lon=%.4f",
-           (int)info.gps_has_fix, info.gps_satellites,
-           info.gps_latitude, info.gps_longitude);
-
-  if (info.gps_latitude == 0.0 && info.gps_longitude == 0.0 && info.gps_satellites == 0) {
-    // No GPS data yet (GNSS not initialized or no satellites)
+  if (info.gps_latitude == 0.0 && info.gps_longitude == 0.0 && info.gps_satellites == 0)
     return;
-  }
 
   this->gps_published_ = true;
 
@@ -127,14 +115,17 @@ void Sim7670gComponent::update_battery() {
 }
 
 void Sim7670gComponent::dump_config() {
-  LOG_SENSOR("  ", "Latitude", this->latitude_sensor_);
-  LOG_SENSOR("  ", "Longitude", this->longitude_sensor_);
-  LOG_SENSOR("  ", "Altitude", this->altitude_sensor_);
-  LOG_SENSOR("  ", "Speed", this->speed_sensor_);
-  LOG_SENSOR("  ", "Satellites", this->satellites_sensor_);
-  LOG_SENSOR("  ", "HDOP", this->hdop_sensor_);
-  LOG_TEXT_SENSOR("  ", "Datetime", this->datetime_sensor_);
-  LOG_TEXT_SENSOR("  ", "Fix Status", this->fix_status_sensor_);
+  LOG_SENSOR("  ", "Battery Voltage", this->battery_sensor_);
+  if (this->gps_enabled_) {
+    LOG_SENSOR("  ", "Latitude", this->latitude_sensor_);
+    LOG_SENSOR("  ", "Longitude", this->longitude_sensor_);
+    LOG_SENSOR("  ", "Altitude", this->altitude_sensor_);
+    LOG_SENSOR("  ", "Speed", this->speed_sensor_);
+    LOG_SENSOR("  ", "Satellites", this->satellites_sensor_);
+    LOG_SENSOR("  ", "HDOP", this->hdop_sensor_);
+    LOG_TEXT_SENSOR("  ", "Datetime", this->datetime_sensor_);
+    LOG_TEXT_SENSOR("  ", "Fix Status", this->fix_status_sensor_);
+  }
   ESP_LOGCONFIG(TAG, "  GPS: %s", this->gps_enabled_ ? "enabled" : "disabled");
 }
 

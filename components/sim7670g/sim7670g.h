@@ -16,21 +16,20 @@
 namespace esphome {
 namespace sim7670g {
 
-/// LILYGO T-SIM7670G-S3 component: battery ADC + GPS from microlink info.
+/// LILYGO T-SIM7670G-S3 component: battery ADC + optional GPS.
 ///
 /// Battery: reads the board's battery voltage from its ADC pin.
-/// GPS: reads position data from the microlink's cellular info struct.
-///     The microlink polls AT+CGPSINFO during the AT phase (before PPP dials)
-///     and stores the result. This component reads it and publishes to sensors.
+/// GPS: disabled by default. The SIM7670G outputs NMEA on the AT UART
+///     (shared with cellular data), so GPS only works in AT socket mode,
+///     not during PPP (Tailscale). When enabled, reads position data from
+///     the microlink's cellular info struct (polled once during AT phase).
 class Sim7670gComponent : public Component {
  public:
-  // Battery
   void set_battery_adc_channel(uint8_t channel) { this->battery_adc_channel_ = channel; }
   void set_voltage_divider(float divider) { this->voltage_divider_ = divider; }
   void set_update_interval(uint32_t ms) { this->update_interval_ms_ = ms; }
   void set_battery_sensor(sensor::Sensor *s) { this->battery_sensor_ = s; }
 
-  // GPS
   void set_gps_enabled(bool enabled) { this->gps_enabled_ = enabled; }
 
   void set_latitude_sensor(sensor::Sensor *s) { this->latitude_sensor_ = s; }
@@ -43,7 +42,6 @@ class Sim7670gComponent : public Component {
   void set_datetime_sensor(text_sensor::TextSensor *s) { this->datetime_sensor_ = s; }
   void set_fix_status_sensor(text_sensor::TextSensor *s) { this->fix_status_sensor_ = s; }
 
-  /// Publish GPS data from microlink info struct.
   void publish_gps_data();
 
   float get_setup_priority() const override { return setup_priority::DATA; }
@@ -54,7 +52,6 @@ class Sim7670gComponent : public Component {
  private:
   void update_battery();
 
-  // Battery
   uint8_t battery_adc_channel_{8};
   float voltage_divider_{2.0f};
   uint32_t update_interval_ms_{30000};
@@ -66,10 +63,9 @@ class Sim7670gComponent : public Component {
 #endif
   sensor::Sensor *battery_sensor_{nullptr};
 
-  bool gps_enabled_{true};
-  bool gps_published_{false};  // GPS data published once after microlink has it
+  bool gps_enabled_{false};
+  bool gps_published_{false};
 
-  // GPS sensors
   sensor::Sensor *latitude_sensor_{nullptr};
   sensor::Sensor *longitude_sensor_{nullptr};
   sensor::Sensor *altitude_sensor_{nullptr};
