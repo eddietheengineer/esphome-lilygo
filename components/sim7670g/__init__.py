@@ -37,6 +37,15 @@ def _validate_adc_channel(value):
     return value - 1  # GPIO N maps to ADC1 channel N-1 on ESP32-S3
 
 
+def _validate_solar_adc_channel(value):
+    """Solar ADC on ESP32-S3 Standard variant uses GPIO18 = ADC2_CH7.
+    Accepts GPIO number and converts to ADC2 channel."""
+    value = cv.int_(value)
+    if value != 18:
+      raise cv.Invalid("solar_adc must be GPIO18 (ADC2 pin on ESP32-S3 Standard)")
+    return 7  # GPIO 18 maps to ADC2 channel 7 on ESP32-S3
+
+
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(Sim7670gComponent),
@@ -47,16 +56,6 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_SOLAR_DIVIDER, default=2.0): cv.positive_float,
     }
 ).extend(cv.COMPONENT_SCHEMA)
-
-
-def _validate_solar_adc_channel(value):
-    """Solar ADC on ESP32-S3 Standard variant uses GPIO18 = ADC2_CH7.
-    Accepts GPIO number and converts to ADC2 channel."""
-    value = cv.int_(value)
-    if value != 18:
-      raise cv.Invalid("solar_adc must be GPIO18 (ADC2 pin on ESP32-S3 Standard)")
-    return 7  # GPIO 18 maps to ADC2 channel 7 on ESP32-S3
-
 
 async def to_code(config):
     cg.add_global(sim7670g_ns.using)
