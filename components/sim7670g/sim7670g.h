@@ -40,6 +40,7 @@ class Sim7670gComponent : public Component {
   adc_oneshot_unit_handle_t adc_handle_{nullptr};
   uint8_t battery_adc_channel_{7};  // GPIO 8 = ADC1 channel 7 on ESP32-S3
   sensor::Sensor *battery_sensor_{nullptr};
+#endif
 };
 
 }  // namespace sim7670g
