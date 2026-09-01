@@ -8,6 +8,8 @@
 #include "esphome/components/sensor/sensor.h"
 
 #ifdef USE_ESP32
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 #endif
 
@@ -38,6 +40,7 @@ class Sim7670gComponent : public Component {
 #ifdef USE_ESP32
   bool adc_ready_{false};
   adc_oneshot_unit_handle_t adc_handle_{nullptr};
+  adc_cali_handle_t adc_cali_handle_{nullptr};
   uint8_t battery_adc_channel_{7};  // GPIO 8 = ADC1 channel 7 on ESP32-S3
   sensor::Sensor *battery_sensor_{nullptr};
 #endif

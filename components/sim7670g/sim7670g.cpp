@@ -29,6 +29,17 @@ void Sim7670gComponent::setup() {
                                   &chan_config) != ESP_OK) {
     ESP_LOGE(TAG, "Failed to configure ADC channel %u", this->battery_adc_channel_);
     this->mark_failed();
+  }
+  // Create ADC calibration scheme (curve fitting) for accurate mV conversion.
+  // adc_cali reads the actual reference voltage from eFuse, fixing the scaling
+  // that a hardcoded 1100mV reference would get wrong (varies 1000-1200mV per chip).
+  adc_cali_curve_fitting_config_t cali_cfg = {
+      .unit_id = ADC_UNIT_1,
+      .atten = ADC_ATTEN_DB_11,
+  };
+  if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &this->adc_cali_handle_) != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to create ADC calibration scheme");
+    this->mark_failed();
     return;
   }
   this->adc_ready_ = true;
@@ -56,16 +67,14 @@ void Sim7670gComponent::update_battery() {
                        &adc_val) != ESP_OK) {
     return;
   }
-
-  // LilyGo board: 2:1 voltage divider on battery ADC pin.
-  // With ADC_ATTEN_DB_11, the ADC reference is 1100mV.
-  // analogReadMilliVolts() in Arduino returns calibrated mV.
-  // In ESP-IDF, adc_oneshot_read() returns raw digital value (0-4095).
-  // Convert: v_pin_mv = adc_val * 1100 / 4095 (linear approx, no curve fitting).
-  // Then multiply by voltage_divider_ (2.0) for actual battery voltage.
-  ESP_LOGI(TAG, "Battery ADC raw=%d", adc_val);
-  float v_pin_mv = adc_val * (1100.0f / 4095.0f);
+  // adc_cali_raw_to_voltage converts raw ADC to calibrated mV using eFuse reference.
+  int v_pin_mv = 0;
+  if (adc_cali_raw_to_voltage(this->adc_cali_handle_, adc_val, &v_pin_mv) != ESP_OK) {
+    ESP_LOGW(TAG, "ADC calibration failed, using raw value");
+    return;
+  }
   float v_battery = (v_pin_mv * this->voltage_divider_) / 1000.0f;
+  ESP_LOGI(TAG, "Battery: raw=%d pin=%dmV bat=%.2fV", adc_val, v_pin_mv, v_battery);
   this->battery_sensor_->publish_state(v_battery);
 #endif
 }

@@ -50,6 +50,7 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     include_builtin_idf_component("esp_adc")
+    include_builtin_idf_component("adc_cali")
 
     cg.add(var.set_battery_adc_channel(config[CONF_BATTERY_ADC]))
     cg.add(var.set_voltage_divider(config[CONF_VOLTAGE_DIVIDER]))
