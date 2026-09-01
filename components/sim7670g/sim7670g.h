@@ -23,6 +23,7 @@ class Sim7670gComponent : public Component {
   void set_battery_adc_channel(uint8_t channel) { this->battery_adc_channel_ = channel; }
   void set_voltage_divider(float divider) { this->voltage_divider_ = divider; }
   void set_update_interval(uint32_t ms) { this->update_interval_ms_ = ms; }
+  void set_battery_sensor(sensor::Sensor *s) { this->battery_sensor_ = s; }
   void set_solar_adc_channel(uint8_t channel) { this->solar_adc_channel_ = channel; }
   void set_solar_voltage_divider(float divider) { this->solar_voltage_divider_ = divider; }
   void set_solar_sensor(sensor::Sensor *s) { this->solar_sensor_ = s; }

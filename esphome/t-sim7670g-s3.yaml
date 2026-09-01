@@ -70,6 +70,8 @@ tailscale:
 sim7670g:
   battery_adc: 8
   voltage_divider: 2.0
+  solar_adc: 18
+  solar_divider: 2.0
   update_interval: 30s
 
 api:
@@ -107,6 +109,8 @@ sensor:
   - platform: sim7670g
     battery_voltage:
       name: "Battery Voltage"
+    solar_voltage:
+      name: "Solar Voltage"
 
 switch:
   - platform: tailscale
