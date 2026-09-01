@@ -2,11 +2,6 @@
 
 #include "esphome/core/log.h"
 
-#ifdef USE_ESP32
-extern "C" {
-#include "ml_cellular.h"
-}
-#endif
 
 namespace esphome {
 namespace sim7670g {
@@ -40,10 +35,6 @@ void Sim7670gComponent::setup() {
   ESP_LOGI(TAG, "Battery ADC ready on channel %u (divider %.2f)", this->battery_adc_channel_,
            this->voltage_divider_);
 #endif
-
-  if (this->gps_enabled_) {
-    ESP_LOGW(TAG, "GPS enabled but only works in AT socket mode (not PPP/Tailscale)");
-  }
 }
 
 void Sim7670gComponent::loop() {
@@ -52,49 +43,6 @@ void Sim7670gComponent::loop() {
     this->last_update_ = now;
     this->update_battery();
   }
-
-  if (this->gps_enabled_ && !this->gps_published_) {
-    static uint32_t last_gps_check = 0;
-    if (now - last_gps_check >= 10000) {
-      last_gps_check = now;
-      this->publish_gps_data();
-    }
-  }
-}
-
-void Sim7670gComponent::publish_gps_data() {
-#ifdef USE_ESP32
-  ml_cellular_info_t info;
-  if (ml_cellular_get_info(&info) != ESP_OK)
-    return;
-
-  if (info.gps_latitude == 0.0 && info.gps_longitude == 0.0 && info.gps_satellites == 0)
-    return;
-
-  this->gps_published_ = true;
-
-  if (this->latitude_sensor_)
-    this->latitude_sensor_->publish_state(static_cast<float>(info.gps_latitude));
-  if (this->longitude_sensor_)
-    this->longitude_sensor_->publish_state(static_cast<float>(info.gps_longitude));
-  if (this->altitude_sensor_)
-    this->altitude_sensor_->publish_state(static_cast<float>(info.gps_altitude));
-  if (this->speed_sensor_)
-    this->speed_sensor_->publish_state(static_cast<float>(info.gps_speed));
-  if (this->satellites_sensor_)
-    this->satellites_sensor_->publish_state(info.gps_satellites);
-  if (this->hdop_sensor_)
-    this->hdop_sensor_->publish_state(static_cast<float>(info.gps_hdop));
-
-  if (this->fix_status_sensor_) {
-    const char *status_str = info.gps_has_fix ? "3D Fix" : "No Fix";
-    this->fix_status_sensor_->publish_state(status_str);
-  }
-
-  ESP_LOGI(TAG, "GPS: lat=%.6f lon=%.6f alt=%.1f speed=%.1f sat=%d hdop=%.2f fix=%d",
-           info.gps_latitude, info.gps_longitude, info.gps_altitude,
-           info.gps_speed, info.gps_satellites, info.gps_hdop, (int)info.gps_has_fix);
-#endif
 }
 
 void Sim7670gComponent::update_battery() {
@@ -118,21 +66,11 @@ void Sim7670gComponent::update_battery() {
   ESP_LOGI(TAG, "Battery ADC raw=%d", adc_val);
   float v_pin_mv = adc_val * (1100.0f / 4095.0f);
   float v_battery = (v_pin_mv * this->voltage_divider_) / 1000.0f;
+  this->battery_sensor_->publish_state(v_battery);
 #endif
 }
 void Sim7670gComponent::dump_config() {
   LOG_SENSOR("  ", "Battery Voltage", this->battery_sensor_);
-  if (this->gps_enabled_) {
-    LOG_SENSOR("  ", "Latitude", this->latitude_sensor_);
-    LOG_SENSOR("  ", "Longitude", this->longitude_sensor_);
-    LOG_SENSOR("  ", "Altitude", this->altitude_sensor_);
-    LOG_SENSOR("  ", "Speed", this->speed_sensor_);
-    LOG_SENSOR("  ", "Satellites", this->satellites_sensor_);
-    LOG_SENSOR("  ", "HDOP", this->hdop_sensor_);
-    LOG_TEXT_SENSOR("  ", "Datetime", this->datetime_sensor_);
-    LOG_TEXT_SENSOR("  ", "Fix Status", this->fix_status_sensor_);
-  }
-  ESP_LOGCONFIG(TAG, "  GPS: %s", this->gps_enabled_ ? "enabled" : "disabled");
 }
 
 }  // namespace sim7670g

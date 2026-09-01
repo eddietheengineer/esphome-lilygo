@@ -3,11 +3,6 @@
 Handles:
   - Battery voltage ADC sensor
 
-GPS support is available but disabled by default. The SIM7670G outputs NMEA
-on the AT UART (shared with cellular data), which means GPS only works in
-AT socket mode — not during PPP (Tailscale). To enable GPS, set `gps: true`
-and use AT socket mode instead of PPP.
-
 The cellular data path is handled by the microlink (Tailscale) component's
 built-in SIM7670G PPP driver.
 """
@@ -29,7 +24,6 @@ Sim7670gComponent = sim7670g_ns.class_("Sim7670gComponent", cg.Component)
 
 CONF_BATTERY_ADC = "battery_adc"
 CONF_VOLTAGE_DIVIDER = "voltage_divider"
-CONF_GPS = "gps"
 
 
 def _validate_adc_channel(value):
@@ -47,7 +41,6 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Required(CONF_BATTERY_ADC): _validate_adc_channel,
         cv.Optional(CONF_VOLTAGE_DIVIDER, default=2.0): cv.positive_float,
         cv.Optional(CONF_UPDATE_INTERVAL, default="30s"): cv.positive_time_period_milliseconds,
-        cv.Optional(CONF_GPS, default=False): cv.boolean,
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -61,4 +54,3 @@ async def to_code(config):
     cg.add(var.set_battery_adc_channel(config[CONF_BATTERY_ADC]))
     cg.add(var.set_voltage_divider(config[CONF_VOLTAGE_DIVIDER]))
     cg.add(var.set_update_interval(config[CONF_UPDATE_INTERVAL].total_milliseconds))
-    cg.add(var.set_gps_enabled(config[CONF_GPS]))
