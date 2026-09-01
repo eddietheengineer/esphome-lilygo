@@ -1,7 +1,7 @@
 """ESPHome component for the LILYGO T-SIM7670G-S3.
 
-Handles:
   - Battery voltage ADC sensor
+  - Solar panel voltage ADC sensor (GPIO18 / ADC2)
 
 The cellular data path is handled by the microlink (Tailscale) component's
 built-in SIM7670G PPP driver.
@@ -24,6 +24,8 @@ Sim7670gComponent = sim7670g_ns.class_("Sim7670gComponent", cg.Component)
 
 CONF_BATTERY_ADC = "battery_adc"
 CONF_VOLTAGE_DIVIDER = "voltage_divider"
+CONF_SOLAR_ADC = "solar_adc"
+CONF_SOLAR_DIVIDER = "solar_divider"
 
 
 def _validate_adc_channel(value):
@@ -41,8 +43,19 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Required(CONF_BATTERY_ADC): _validate_adc_channel,
         cv.Optional(CONF_VOLTAGE_DIVIDER, default=2.0): cv.positive_float,
         cv.Optional(CONF_UPDATE_INTERVAL, default="30s"): cv.positive_time_period_milliseconds,
+        cv.Optional(CONF_SOLAR_ADC): _validate_solar_adc_channel,
+        cv.Optional(CONF_SOLAR_DIVIDER, default=2.0): cv.positive_float,
     }
 ).extend(cv.COMPONENT_SCHEMA)
+
+
+def _validate_solar_adc_channel(value):
+    """Solar ADC on ESP32-S3 Standard variant uses GPIO18 = ADC2_CH7.
+    Accepts GPIO number and converts to ADC2 channel."""
+    value = cv.int_(value)
+    if value != 18:
+      raise cv.Invalid("solar_adc must be GPIO18 (ADC2 pin on ESP32-S3 Standard)")
+    return 7  # GPIO 18 maps to ADC2 channel 7 on ESP32-S3
 
 
 async def to_code(config):
@@ -55,3 +68,8 @@ async def to_code(config):
     cg.add(var.set_battery_adc_channel(config[CONF_BATTERY_ADC]))
     cg.add(var.set_voltage_divider(config[CONF_VOLTAGE_DIVIDER]))
     cg.add(var.set_update_interval(config[CONF_UPDATE_INTERVAL].total_milliseconds))
+
+    if CONF_SOLAR_ADC in config:
+        cg.add(var.set_solar_adc_channel(config[CONF_SOLAR_ADC]))
+        cg.add(var.set_solar_voltage_divider(config[CONF_SOLAR_DIVIDER]))
+        cg.add(var.set_has_solar(True))

@@ -12,12 +12,18 @@ from . import Sim7670gComponent
 DEPENDENCIES = ["sim7670g"]
 
 CONF_BATTERY_VOLTAGE = "battery_voltage"
+CONF_SOLAR_VOLTAGE = "solar_voltage"
 
 
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.use_id(Sim7670gComponent),
         cv.Optional(CONF_BATTERY_VOLTAGE): sensor.sensor_schema(
+            unit_of_measurement=UNIT_VOLT,
+            accuracy_decimals=2,
+            state_class=STATE_CLASS_MEASUREMENT,
+        ),
+        cv.Optional(CONF_SOLAR_VOLTAGE): sensor.sensor_schema(
             unit_of_measurement=UNIT_VOLT,
             accuracy_decimals=2,
             state_class=STATE_CLASS_MEASUREMENT,
@@ -32,3 +38,7 @@ async def to_code(config):
     if battery_config := config.get(CONF_BATTERY_VOLTAGE):
         sens = await sensor.new_sensor(battery_config)
         cg.add(hub.set_battery_sensor(sens))
+
+    if solar_config := config.get(CONF_SOLAR_VOLTAGE):
+        sens = await sensor.new_sensor(solar_config)
+        cg.add(hub.set_solar_sensor(sens))
