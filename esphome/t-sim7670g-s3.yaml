@@ -34,7 +34,7 @@ external_components:
       url: https://github.com/eddietheengineer/esphome-tailscale
       ref: feat/sim7670g-cellular-uplink
       path: components
-    refresh: "1h"
+    refresh: "24h"
     components:
       - tailscale
   - source:
@@ -49,12 +49,11 @@ external_components:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-  use_address: !secret tailscale_ip
 
 tailscale:
   auth_key: !secret tailscale_auth_key
   hostname: "t-sim7670g-s3"
-  max_peers: 1
+  max_peers: 16
   priority_peer: !secret priority_peer_ip
   cellular:
     enabled: true
