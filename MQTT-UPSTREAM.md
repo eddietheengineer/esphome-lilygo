@@ -17,6 +17,44 @@ then disables it again to save data most of the time.
 
 ---
 
+## Implementation status (built on this branch)
+
+Implemented **Option D (hybrid)** with one simplification: the `modem`
+component **reuses the microlink cellular driver** (`ml_cellular_init` +
+`ml_cellular_ppp_start`) instead of extracting `ml_cellular.c` into a separate
+ESP-IDF component. Since Option D keeps the Tailscale node in the build (for
+on-demand OTA), the microlink component is compiled anyway — so the modem
+component just calls its cellular driver. **No extraction needed.**
+
+What was built:
+- **`components/modem`** (new ESPHome component, in `esphome-tailscale`):
+  - Brings up the SIM7670G PPP (microlink cellular driver) in a background dial
+    task with retry/backoff + redial-on-link-loss.
+  - Implements the `USE_MODEM` interface (`network/util.h`) so
+    `network::is_connected()` reflects the cellular link → `mqtt` works over PPP
+    with no Wi-Fi.
+  - `AUTO_LOAD = ["network"]` (loads the network component / `esp_netif_init`).
+  - State sensors: `data_connected` (binary), `rssi_dbm` (sensor).
+- **`tailscale` component**: added a `start_enabled` option (default `true`).
+  Set `false` → the node does not start at boot (saves data + PSRAM); the
+  `vpn_enabled` switch's initial state now reflects it. Enable on-demand for OTA.
+- **`esphome/t-sim7670g-s3-mqtt.yaml`** (new device config): `modem:` (cellular
+  PPP) + `mqtt:` (publishes sensors) + `tailscale:` (`start_enabled: false`,
+  `cellular` disabled) + `sim7670g:` (battery/solar). No `wifi:`, no `api:`, no
+  `ota:`.
+- **`mosquitto/`** (VPS broker): `docker-compose.yml`, `mosquitto.conf`
+  (1883 plaintext + 8883 TLS), `gen-certs.sh` (self-signed CA + server cert +
+  password file).
+- **`secrets.yaml` / `secrets.yaml.example`**: added `mqtt_broker`,
+  `mqtt_username`, `mqtt_password` (and optional `mqtt_ca_cert`).
+
+The `tailscale` component runs with `cellular.enabled: false` (its default), so
+it does **not** bring up its own PPP — the `modem` component is the sole PPP
+provider (avoids a double `ml_cellular_init` on the singleton modem state). The
+on-demand Tailscale node rides the `modem` component's PPP netif.
+
+---
+
 ## Current architecture (baseline)
 
 ```
@@ -237,19 +275,30 @@ coexist as a separate YAML.
 
 ---
 
-## Concrete next steps (Option D)
+## What was built (Option D, as implemented)
 
-1. Extract `ml_cellular.c` → `components/sim7670g_ppp` (ESP-IDF component,
-   PPP-only; shim `ml_psram_malloc`; drop the AT-socket fallback).
-2. Write `components/modem` (ESPHome) implementing the `USE_MODEM` interface
-   (wraps `sim7670g_ppp`); expose cellular state as sensors.
-3. Configure the `tailscale` component: `cellular.enabled: false` (ride the
-   modem's PPP), `vpn_enabled: false` (off by default).
-4. Add `mqtt:` (sensors + a `tailscale/enable` / `tailscale/disable` command
-   topic) + an `on_message` automation → `switch.turn_on/off(vpn_enabled)`.
-5. Stand up Mosquitto on a VPS (TLS 8883, username/password).
-6. Test (flash over **USB**): verify PPP up → MQTT publishes → HA shows sensors;
-   then exercise the OTA flow (enable Tailscale via MQTT → OTA → disable).
+1. **`components/modem`** (ESPHome, in `esphome-tailscale`) — brings up the
+   SIM7670G PPP via the **microlink cellular driver** (no `ml_cellular.c`
+   extraction; the microlink component is already compiled for the on-demand
+   Tailscale node). Implements the `USE_MODEM` interface so
+   `network::is_connected()` reflects the cellular link; `AUTO_LOAD = ["network"]`;
+   `data_connected` + `rssi_dbm` state sensors.
+2. **`tailscale` component** — added `start_enabled` (default `true`); the
+   `vpn_enabled` switch's initial state now reflects it. Configured
+   `start_enabled: false` (node off at boot) + `cellular` disabled (the modem
+   component dials PPP).
+3. **`esphome/t-sim7670g-s3-mqtt.yaml`** — `modem:` + `mqtt:` + `tailscale:`
+   (`start_enabled: false`) + `sim7670g:`; no `wifi:`/`api:`/`ota:`.
+4. **`mosquitto/`** — VPS broker: `docker-compose.yml`, `mosquitto.conf`
+   (1883 plaintext + 8883 TLS), `gen-certs.sh` (self-signed CA + server cert +
+   password file).
+5. **`secrets.yaml` / `secrets.yaml.example`** — `mqtt_broker`,
+   `mqtt_username`, `mqtt_password` (+ optional `mqtt_ca_cert`).
+
+**Remaining (needs a VPS + the device):** stand up the broker, set the MQTT
+secrets, flash over **USB**, verify PPP up → MQTT publishes → HA shows sensors;
+then exercise the OTA flow (turn on `vpn_enabled` → wait for `VPN Connected` →
+`esphome upload --device <100.x.y.z>` → turn off `vpn_enabled`).
 
 ## Config sketch (Option D)
 

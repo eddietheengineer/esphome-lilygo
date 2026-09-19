@@ -1,0 +1,142 @@
+# LILYGO T-SIM7670G-S3 - ESP32-S3 (N16R8) + SIM7670G LTE
+#
+# MQTT variant (no Tailscale by default).
+#
+# The ESP32-S3 dials the SIM7670G's cellular (LTE) data link over its UART as
+# PPP (via the `modem` component's microlink cellular driver). That PPP netif
+# is the uplink. ESPHome's native `mqtt` component publishes sensor data to a
+# broker over the cellular link. No Tailscale node runs by default (saves
+# cellular data + PSRAM). The `tailscale` component is still present with
+# start_enabled: false so you can enable it on-demand (vpn_enabled switch) for
+# OTA.
+#
+# Architecture:
+#   Home Assistant  ◄── MQTT (subscribes) ──►  Mosquitto broker (VPS, public IP)
+#                                                  ▲
+#                                                  │ MQTT (publishes, outbound)
+#   ESP32-S3 (ESPHome) ── cellular PPP ──► SIM7670G ── LTE ──► internet
+#
+# See ../README.md for the full setup guide (including the VPS broker).
+
+esphome:
+  name: t-sim7670g-s3
+  friendly_name: T-SIM7670G-S3 (MQTT)
+
+esp32:
+  board: esp32-s3-devkitc1-n16r8
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG: y
+      CONFIG_LWIP_TCPIP_TASK_STACK_SIZE: "6144"
+      CONFIG_LWIP_TCPIP_CORE_LOCKING: n
+  flash_size: 16MB
+
+psram:
+  mode: quad
+  speed: 80MHz
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/eddietheengineer/esphome-tailscale
+      ref: feat/mqtt-uplink
+      path: components
+    refresh: "24h"
+    components:
+      - tailscale
+      - modem
+  - source:
+      type: git
+      url: https://github.com/eddietheengineer/esphome-lilygo
+      ref: main
+      path: components
+    refresh: "1h"
+    components:
+      - sim7670g
+
+# Cellular (SIM7670G PPP) uplink. The modem component powers the SIM7670G up,
+# sets the APN, and dials PPP; the resulting PPP netif becomes the default
+# route. No Wi-Fi is required.
+modem:
+  apn: !secret modem_apn
+  sim_pin: !secret modem_sim_pin
+  ppp_user: !secret modem_ppp_user
+  ppp_pass: !secret modem_ppp_pass
+  # tx_pin / rx_pin / pwrkey_pin / dtr_pin: leave unset to use the LILYGO
+  # T-SIM7670G-S3 board preset (Standard SKU: TX=4/RX=5/PWRKEY=46/DTR=7).
+  # Set them to match your board revision if the preset doesn't work.
+
+# MQTT over the cellular PPP uplink. The broker must be reachable from the
+# public internet (the device is behind carrier NAT) - a small Mosquitto on a
+# VPS (see README "MQTT broker") or a cloud broker.
+#
+# Default below is plaintext (port 1883) so it works out of the box for
+# testing. For production, enable the TLS block (port 8883) - see README.
+mqtt:
+  broker: !secret mqtt_broker
+  port: 1883
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  # --- TLS (recommended for production) ---
+  # Uncomment and point `certificate` at the broker's CA certificate (a file
+  # next to this .yaml, or an absolute path). For a self-signed broker cert you
+  # can instead set `insecure: true` to skip verification.
+  # port: 8883
+  # tls:
+  #   certificate: mosquitto-ca.pem
+  #   # insecure: true
+
+# Tailscale is present but OFF by default (start_enabled: false). The cellular
+# PPP uplink is provided by the `modem` component above, so the tailscale
+# component runs with cellular disabled. Enable it on-demand (vpn_enabled
+# switch) to get a 100.x.y.z address for OTA.
+tailscale:
+  auth_key: !secret tailscale_auth_key
+  hostname: "t-sim7670g-s3"
+  max_peers: 16
+  start_enabled: false
+
+sim7670g:
+  battery_adc: 8
+  voltage_divider: 2.0
+  solar_adc: 18
+  solar_divider: 2.0
+  update_interval: 30s
+
+logger:
+  level: INFO
+  baud_rate: 921600
+
+# No ota: in MQTT mode HA cannot reach the device (it's behind carrier NAT).
+# To OTA: turn on the "VPN Enabled" switch, wait for "VPN Connected" to turn
+# on, then run `esphome upload --device <100.x.y.z>` (see README "OTA").
+
+binary_sensor:
+  - platform: modem
+    data_connected:
+      name: "Cellular Data Connected"
+      icon: mdi:signal-cellular-connected
+  - platform: tailscale
+    connected:
+      name: "VPN Connected"
+      icon: mdi:shield-check
+
+sensor:
+  - platform: modem
+    rssi_dbm:
+      name: "Cellular RSSI"
+  - platform: sim7670g
+    battery_voltage:
+      name: "Battery Voltage"
+    solar_voltage:
+      name: "Solar Voltage"
+
+switch:
+  - platform: tailscale
+    vpn_enabled:
+      name: "VPN Enabled"
+      icon: mdi:vpn
+  - platform: restart
+    name: "Reboot"
