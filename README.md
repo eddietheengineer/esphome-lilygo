@@ -305,6 +305,75 @@ for the complete list.
 
 ---
 
+## 9. MQTT uplink variant (alternative to Tailscale)
+
+`esphome/t-sim7670g-s3-mqtt.yaml` is an alternative device config that
+publishes sensor data over **ESPHome native MQTT** instead of running a
+Tailscale node. The Tailscale component stays in the build but is **off by
+default** — enable it on-demand for OTA. See [MQTT-UPSTREAM.md](MQTT-UPSTREAM.md)
+for the full investigation (options, data comparison, tradeoffs).
+
+**Why:** an always-on Tailscale node sends continuous background traffic
+(control-plane polls, DISCO, WireGuard keepalives, DERP). MQTT sends only
+keepalives + sensor publishes — materially less cellular data.
+**Tradeoff:** HA can't reach the device directly (carrier NAT), so OTA needs
+the on-demand Tailscale step below.
+
+### 9a. Set up the VPS broker
+
+On a VPS with a public IP (Docker installed):
+
+```sh
+git clone https://github.com/eddietheengineer/esphome-lilygo
+cd esphome-lilygo/mosquitto
+# args: <vps-ip-or-domain> <device-password> [device-username] [ha-password]
+./gen-certs.sh 203.0.113.5 "device-s3cr3t" esphome "ha-s3cr3t"
+docker compose up -d
+```
+
+This creates a self-signed CA + server cert and a password file with two users
+(`esphome` for the device, `homeassistant` for HA). Topic access is scoped per
+user by the committed `acl.conf` (mounted by the compose file). The broker
+listens on **8883 (TLS, public)** and **1883 (plaintext, localhost only)**.
+
+### 9b. Configure the device
+
+1. Copy `mosquitto/certs/ca.crt` to the build host as
+   `esphome/mosquitto-ca.pem` (next to the .yaml).
+2. In `esphome/secrets.yaml` set:
+
+   ```yaml
+   mqtt_broker: "203.0.113.5"      # the VPS IP/domain from gen-certs.sh
+   mqtt_username: "esphome"
+   mqtt_password: "device-s3cr3t"  # arg 2 of gen-certs.sh
+   mqtt_ca_cert: "mosquitto-ca.pem"
+   ```
+
+3. Flash over USB: `esphome run t-sim7670g-s3-mqtt.yaml` (or `esphome
+   compile` + `esphome flash`). Watch the log for `Cellular PPP up` followed
+   by `MQTT: Connected`.
+
+### 9c. Add to Home Assistant
+
+Add the **MQTT** integration:
+
+- Host: the VPS IP/domain, Port: **8883**
+- Username: `homeassistant`, Password: the 4th `gen-certs.sh` argument
+- Use encryption: **Yes** — paste the contents of `mosquitto/certs/ca.crt`
+  into *Certificate Authority*
+
+ESPHome's MQTT auto-discovery creates the sensor/switch entities.
+
+### 9d. OTA (on-demand Tailscale)
+
+1. Turn on the **VPN Enabled** switch (via HA, or an HA automation).
+2. Wait for **VPN Connected** to turn on (the node re-authenticates with its
+   stored key and keeps its `100.x` IP).
+3. `esphome upload --device <100.x.y.z> t-sim7670g-s3-mqtt.yaml`
+4. Turn **VPN Enabled** off to save data.
+
+---
+
 ## References
 
 - [LilyGo T-SIM7670G-S3 wiki](https://wiki.lilygo.cc/products/t-sim-series/t-sim7670g-s3/)

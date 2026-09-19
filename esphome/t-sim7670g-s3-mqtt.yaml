@@ -19,7 +19,7 @@
 # See ../README.md for the full setup guide (including the VPS broker).
 
 esphome:
-  name: t-sim7670g-s3
+  name: t-sim7670g-s3-mqtt
   friendly_name: T-SIM7670G-S3 (MQTT)
 
 esp32:
@@ -34,7 +34,7 @@ esp32:
   flash_size: 16MB
 
 psram:
-  mode: quad
+  mode: octal
   speed: 80MHz
 
 external_components:
@@ -64,29 +64,39 @@ modem:
   sim_pin: !secret modem_sim_pin
   ppp_user: !secret modem_ppp_user
   ppp_pass: !secret modem_ppp_pass
-  # tx_pin / rx_pin / pwrkey_pin / dtr_pin: leave unset to use the LILYGO
-  # T-SIM7670G-S3 board preset (Standard SKU: TX=4/RX=5/PWRKEY=46/DTR=7).
-  # Set them to match your board revision if the preset doesn't work.
+  # Standard SKU LILYGO T-SIM7670G-S3 pin map (same as the working baseline
+  # config). Set explicitly: the component's "leave unset" path does NOT use
+  # the board preset for the UART pins (it falls back to the XIAO/SIM7600X
+  # defaults), so unset pins would dial the wrong GPIOs.
+  tx_pin: 4
+  rx_pin: 5
+  pwrkey_pin: 46
+  dtr_pin: 7
 
 # MQTT over the cellular PPP uplink. The broker must be reachable from the
 # public internet (the device is behind carrier NAT) - a small Mosquitto on a
-# VPS (see README "MQTT broker") or a cloud broker.
+# VPS (see README "MQTT uplink variant") or a cloud broker.
 #
-# Default below is plaintext (port 1883) so it works out of the box for
-# testing. For production, enable the TLS block (port 8883) - see README.
+# TLS (port 8883) is the default: the VPS broker's plaintext listener (1883)
+# is bound to localhost, so a cellular device MUST use TLS. Before building,
+# copy the broker's CA cert (mosquitto/certs/ca.crt) next to this .yaml as
+# mosquitto-ca.pem and set mqtt_ca_cert in secrets.yaml (see README).
+#
+# For a local plaintext broker (testing on your LAN): set port: 1883 and
+# comment out the certificate_authority / skip_cert_cn_check lines.
 mqtt:
   broker: !secret mqtt_broker
-  port: 1883
+  port: 8883
   username: !secret mqtt_username
   password: !secret mqtt_password
-  # --- TLS (recommended for production) ---
-  # Uncomment and point `certificate` at the broker's CA certificate (a file
-  # next to this .yaml, or an absolute path). For a self-signed broker cert you
-  # can instead set `insecure: true` to skip verification.
-  # port: 8883
-  # tls:
-  #   certificate: mosquitto-ca.pem
-  #   # insecure: true
+  # --- TLS ---
+  # Path to the broker's CA certificate (file next to this .yaml, or absolute).
+  # For the self-signed CA from mosquitto/gen-certs.sh the CA cert alone is
+  # enough (the server cert is signed by it). The cert chain is still
+  # verified against this CA; skip_cert_cn_check only skips the hostname
+  # match (useful when mqtt_broker is a domain but the cert's SAN is the IP).
+  certificate_authority: !secret mqtt_ca_cert
+  skip_cert_cn_check: true
 
 # Tailscale is present but OFF by default (start_enabled: false). The cellular
 # PPP uplink is provided by the `modem` component above, so the tailscale

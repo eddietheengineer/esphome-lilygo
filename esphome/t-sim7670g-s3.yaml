@@ -25,7 +25,7 @@ esp32:
   flash_size: 16MB
 
 psram:
-  mode: quad
+  mode: octal
   speed: 80MHz
 
 external_components:

@@ -43,10 +43,12 @@ What was built:
   `cellular` disabled) + `sim7670g:` (battery/solar). No `wifi:`, no `api:`, no
   `ota:`.
 - **`mosquitto/`** (VPS broker): `docker-compose.yml`, `mosquitto.conf`
-  (1883 plaintext + 8883 TLS), `gen-certs.sh` (self-signed CA + server cert +
-  password file).
+  (8883 TLS public + 1883 plaintext localhost-only), `acl.conf` (per-user
+  topic ACLs), `gen-certs.sh` (self-signed CA + server cert + password file
+  for the `esphome` and `homeassistant` users).
 - **`secrets.yaml` / `secrets.yaml.example`**: added `mqtt_broker`,
-  `mqtt_username`, `mqtt_password` (and optional `mqtt_ca_cert`).
+  `mqtt_username`, `mqtt_password`, `mqtt_ca_cert` (required — TLS is the
+  default).
 
 The `tailscale` component runs with `cellular.enabled: false` (its default), so
 it does **not** bring up its own PPP — the `modem` component is the sole PPP
@@ -290,17 +292,21 @@ coexist as a separate YAML.
 3. **`esphome/t-sim7670g-s3-mqtt.yaml`** — `modem:` + `mqtt:` + `tailscale:`
    (`start_enabled: false`) + `sim7670g:`; no `wifi:`/`api:`/`ota:`.
 4. **`mosquitto/`** — VPS broker: `docker-compose.yml`, `mosquitto.conf`
-   (1883 plaintext + 8883 TLS), `gen-certs.sh` (self-signed CA + server cert +
-   password file).
+   (8883 TLS public + 1883 plaintext localhost-only), `acl.conf` (per-user
+   topic ACLs), `gen-certs.sh` (self-signed CA + server cert + password file
+   for the `esphome` and `homeassistant` users).
 5. **`secrets.yaml` / `secrets.yaml.example`** — `mqtt_broker`,
-   `mqtt_username`, `mqtt_password` (+ optional `mqtt_ca_cert`).
+   `mqtt_username`, `mqtt_password`, `mqtt_ca_cert` (required — TLS is the
+   default).
 
 **Remaining (needs a VPS + the device):** stand up the broker, set the MQTT
 secrets, flash over **USB**, verify PPP up → MQTT publishes → HA shows sensors;
 then exercise the OTA flow (turn on `vpn_enabled` → wait for `VPN Connected` →
 `esphome upload --device <100.x.y.z>` → turn off `vpn_enabled`).
 
-## Config sketch (Option D)
+## Config sketch (Option D, as built)
+
+The full config is `esphome/t-sim7670g-s3-mqtt.yaml`; the load-bearing parts:
 
 ```yaml
 esphome:
@@ -312,37 +318,35 @@ esp32:
     type: esp-idf
     sdkconfig_options:
       CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG: y
-      CONFIG_PPP_SUPPORT: y
-      CONFIG_SPIRAM: y
-      CONFIG_SPIRAM_MODE_OCT: y      # N16R8 = octal PSRAM
-      CONFIG_SPIRAM_SPEED_80M: y
+      CONFIG_LWIP_TCPIP_TASK_STACK_SIZE: "6144"
+      CONFIG_LWIP_TCPIP_CORE_LOCKING: n
   flash_size: 16MB
 psram:
-  mode: octal
+  mode: octal            # N16R8 = octal PSRAM
   speed: 80MHz
 external_components:
   - source:
       type: git
-      url: https://github.com/eddietheengineer/esphome-lilygo
+      url: https://github.com/eddietheengineer/esphome-tailscale
       ref: feat/mqtt-uplink
       path: components
     components:
-      - sim7670g
-      - modem            # new: wraps sim7670g_ppp, provides USE_MODEM
+      - tailscale        # kept for the on-demand OTA node
+      - modem            # wraps the microlink cellular driver, provides USE_MODEM
   - source:
       type: git
-      url: https://github.com/eddietheengineer/esphome-tailscale
-      ref: feat/sim7670g-cellular-uplink
+      url: https://github.com/eddietheengineer/esphome-lilygo
+      ref: main
       path: components
     components:
-      - tailscale        # kept for the on-demand OTA node
+      - sim7670g         # battery/solar ADC
 
-modem:                   # always-on cellular PPP uplink
+modem:                   # always-on cellular PPP uplink (pins are REQUIRED)
   apn: !secret modem_apn
   sim_pin: !secret modem_sim_pin
   ppp_user: !secret modem_ppp_user
   ppp_pass: !secret modem_ppp_pass
-  tx_pin: 4
+  tx_pin: 4              # Standard SKU LILYGO T-SIM7670G-S3
   rx_pin: 5
   pwrkey_pin: 46
   dtr_pin: 7
@@ -350,16 +354,16 @@ modem:                   # always-on cellular PPP uplink
 tailscale:               # off by default; enabled on-demand for OTA
   auth_key: !secret tailscale_auth_key
   hostname: "t-sim7670g-s3"
-  cellular:
-    enabled: false       # do NOT dial PPP here — the modem component does it
+  max_peers: 16
+  start_enabled: false   # node off at boot; cellular stays disabled (modem dials PPP)
 
-mqtt:
-  broker: !secret mqtt_broker_host
+mqtt:                    # TLS by default (the VPS 1883 listener is localhost-only)
+  broker: !secret mqtt_broker
   port: 8883
-  username: !secret mqtt_user
-  password: !secret mqtt_pass
-  certificate_authority: !secret mqtt_ca
-  keepalive: 30s
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  certificate_authority: !secret mqtt_ca_cert
+  skip_cert_cn_check: true
 
 sim7670g:
   battery_adc: 8
@@ -368,48 +372,33 @@ sim7670g:
   solar_divider: 2.0
   update_interval: 30s
 
-sensor:
-  - platform: sim7670g
-    battery_voltage:
-      name: "Battery Voltage"
-    solar_voltage:
-      name: "Solar Voltage"
-
-switch:
-  - platform: tailscale
-    vpn_enabled:
-      name: "VPN Enabled"
-
-# On-demand Tailscale for OTA, driven by HA over MQTT
-mqtt:
-  on_message:
-    - topic: t-sim7670g-s3/cmd/tailscale/enable
-      then:
-        - switch.turn_on: vpn_enabled
-    - topic: t-sim7670g-s3/cmd/tailscale/disable
-      then:
-        - switch.turn_off: vpn_enabled
-
 logger:
   level: INFO
+  baud_rate: 921600
 ```
 
-> Note: the sketch shows two `mqtt:` blocks for readability; in the real config
-> merge `on_message` into the single `mqtt:` block. The `modem:` config key and
-> exact schema are defined when the component is written.
+Entities: `modem` `data_connected` (binary sensor) + `rssi_dbm` (sensor),
+`tailscale` `connected` (binary sensor) + `vpn_enabled` (switch), `sim7670g`
+`battery_voltage`/`solar_voltage` (sensors), plus a `restart` switch. HA drives
+`vpn_enabled` via the auto-generated MQTT command topic
+(`t-sim7670g-s3-mqtt/vpn_enabled/set`) — no `on_message` needed on the device.
 
 ---
 
-## Open items to verify during implementation
+## Open items
 
-- **PSRAM mode:** the current device config says `psram: mode: quad`, but the
-  `tailscale` component forces `CONFIG_SPIRAM_MODE_OCT`. N16R8 is octal PSRAM —
-  confirm `octal` for the standalone build.
-- **Uplink selection:** confirm the microlink node (with `cellular.enabled:
-  false`) uses the `modem` component's PPP netif as its uplink (default lwIP
-  route) when enabled on-demand.
+Resolved during implementation:
+
+- **PSRAM mode:** both device configs use `psram: mode: octal` (N16R8 is octal
+  PSRAM); the build compiles.
+- **`USE_MODEM` auto-define:** confirmed — the `modem` component defines it and
+  the build compiles with `network::is_connected()` reflecting the cellular link.
+
+Still open (need the physical device):
+
+- **Uplink selection:** confirm the microlink node (with `cellular` disabled)
+  uses the `modem` component's PPP netif as its uplink (default lwIP route)
+  when enabled on-demand.
 - **IP stability on re-enable:** confirm the node reuses its NVS device key and
   keeps the same `100.x` IP across enable/disable cycles (so HA's pinned
   `use_address` stays valid).
-- **`USE_MODEM` auto-define:** confirm ESPHome defines `USE_MODEM` for a
-  component named `modem` in this version (2026.6.2).
