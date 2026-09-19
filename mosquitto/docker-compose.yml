@@ -1,0 +1,31 @@
+# Mosquitto broker for the T-SIM7670G-S3 MQTT uplink.
+#
+# Run on a VPS (or any always-on box with a public IP):
+# 1. ./gen-certs.sh <your-vps-ip-or-domain> <device-mqtt-password> [device-username] [ha-mqtt-password]
+# 2. docker compose up -d
+#
+# Then point the device's secrets.yaml (mqtt_broker) and Home Assistant's MQTT
+# integration at this VPS.
+#
+# Port exposure:
+#   8883 (TLS)      - public; the device on cellular connects here
+#   1883 (plaintext)- bound to 127.0.0.1 only; for a Home Assistant instance
+#                     running on the same VPS (never reachable from the internet)
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0.20
+    container_name: mosquitto
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1883:1883" # plaintext, same-VPS only
+      - "8883:8883" # TLS, public
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./acl.conf:/mosquitto/config/acl.conf:ro
+      - ./certs:/mosquitto/certs:ro
+      - ./password.txt:/mosquitto/config/password.txt:ro
+      - mosquitto-data:/mosquitto/data
+
+volumes:
+  mosquitto-data:

@@ -7,6 +7,11 @@ __pycache__/
 
 # --- Secrets: never commit real credentials -------------------------------
 secrets.yaml
+# Generated broker credentials / private keys (mosquitto/gen-certs.sh output)
+mosquitto/password.txt
+mosquitto/certs/
+# Broker CA cert copied to the build host for device TLS
+esphome/mosquitto-ca.pem
 
 # --- Vendored external clones (fetched from their git URL at build time) --
 vendor/
